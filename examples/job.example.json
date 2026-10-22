@@ -1,0 +1,12 @@
+{
+  "api_version": "gpuops/v1",
+  "id": "baseline-seed-42",
+  "project": "example",
+  "command": ["python", "train.py", "--seed", "42"],
+  "working_directory": "/srv/experiments/example",
+  "resources": {
+    "host": "gpu-server",
+    "gpu_count": 1,
+    "memory_mib": 18000
+  }
+}

@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+config.toml
+/.codex/
+*.pem
+*.key
+*.crt
+id_rsa*
+id_ed25519*
+
+# Runtime state and data
+.gpuops/
+state/
+data/
+logs/
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.jsonl
+*.pid
+
+# Build and packaging
+build/
+dist/
+site/
+
+# UI and test artifacts
+output/
+test-results/
+playwright-report/
+.playwright-cli/
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Private deployment observations
+/docs/acceptance/
+/docs/deployment-notes.md

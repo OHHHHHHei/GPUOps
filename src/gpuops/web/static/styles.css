@@ -617,9 +617,13 @@ main {
 }
 
 .queue-name-cell strong,
+.queue-name-cell span {
+  display: block;
+}
+
+.queue-name-cell strong,
 .queue-name-cell span,
 .history-project-cell {
-  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

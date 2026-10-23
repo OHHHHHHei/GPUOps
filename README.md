@@ -13,12 +13,12 @@ Windows control machines and non-NVIDIA accelerators are outside this release.
 ## Install
 
 You need Python 3.10+ and OpenSSH (`ssh` and `scp`) on the control machine.
-Install the [v0.2.0 release](https://github.com/OHHHHHHei/GPUOps/releases/tag/v0.2.0)
+Install the [v0.2.1 release](https://github.com/OHHHHHHei/GPUOps/releases/tag/v0.2.1)
 with [uv](https://docs.astral.sh/uv/getting-started/installation/), including the
 optional Web console:
 
 ```bash
-uv tool install 'gpuops[web] @ https://github.com/OHHHHHHei/GPUOps/releases/download/v0.2.0/gpuops-0.2.0-py3-none-any.whl'
+uv tool install 'gpuops[web] @ https://github.com/OHHHHHHei/GPUOps/releases/download/v0.2.1/gpuops-0.2.1-py3-none-any.whl'
 gpuops version --json
 ```
 
@@ -31,7 +31,7 @@ virtual environment:
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install './gpuops-0.2.0-py3-none-any.whl[web]'
+.venv/bin/python -m pip install './gpuops-0.2.1-py3-none-any.whl[web]'
 .venv/bin/gpuops version --json
 ```
 

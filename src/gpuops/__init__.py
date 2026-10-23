@@ -3,4 +3,4 @@
 from gpuops.models import JobRecord, JobSpec, JobStatus
 
 __all__ = ["JobRecord", "JobSpec", "JobStatus"]
-__version__ = "0.2.0"
+__version__ = "0.2.1"

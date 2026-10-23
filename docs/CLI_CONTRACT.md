@@ -11,7 +11,7 @@ Run `gpuops version --json` locally to discover these independent versions:
 
 ```json
 {
-  "version": "0.2.0",
+  "version": "0.2.1",
   "cli_api_version": "gpuops.cli/v1",
   "job_api_version": "gpuops/v1",
   "worker_api_version": "gpuops.worker.rpc/v1"

@@ -3,6 +3,12 @@
 Changes are recorded here by release. See [release validation](docs/VALIDATION.md)
 for tested behavior and limits.
 
+## 0.2.1 — 2026-10-23
+
+- Fix history table project cells losing table layout on desktop, which shifted
+  their text and row borders. Preserve long-name truncation and the stacked
+  layout on narrow screens.
+
 ## 0.2.0 — 2026-10-23
 
 First public release.

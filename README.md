@@ -1,5 +1,7 @@
 # GPUOps
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 GPUOps monitors Linux NVIDIA servers and runs experiments through a durable
 queue. People and terminal Agents use the same CLI to inspect GPUs, submit work,
 read bounded logs, recover uncertain submissions, and cancel managed jobs. An

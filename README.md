@@ -181,6 +181,25 @@ stdout protocol and an emitter without extra dependencies. Missing, stale, or
 insufficient evidence stays unknown. ETA does not reserve GPUs or control
 scheduling.
 
+## Get Worker alerts on macOS
+
+Enable desktop notifications on your Mac:
+
+```bash
+gpuops alerts enable
+gpuops alerts test
+```
+
+GPUOps checks the Worker status on all registered SSH servers once a minute,
+even when the Web console is closed. It sends one notification when it confirms
+a Worker has stopped and another when that Worker is ready again. If SSH fails,
+GPUOps reports the status as unknown instead of sending a stop notification.
+
+Use `gpuops alerts status` (or `gpuops alerts status --json`) to see the latest
+check and `gpuops alerts disable` to turn alerts off. Checks resume after you
+log in; your Mac must be awake and able to reach the servers. Alerts require no
+changes to the remote Workers and do not restart them.
+
 ## Operating boundary
 
 The queue coordinates jobs sharing one trusted Unix account on each server.

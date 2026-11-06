@@ -79,6 +79,13 @@ History suppresses `next_cursor` on partial results to avoid skipping records.
 shape. Raw GPU telemetry and human messages may gain device-specific fields;
 Agents should use documented state/readiness and job fields for decisions.
 
+On macOS, `alerts status --json` reports whether the local poller is loaded
+(`enabled`), the last completed check (`checked_at`, nullable), and the last
+observations (`servers`). Each observation has a `server_id` and a `status`:
+`ready`, `stopped`, `not_ready`, or `unknown` when the status query failed.
+Check `checked_at` before treating the observations as current. This command
+reads local state only; use `fleet status` for a fresh query.
+
 ## Job lifecycle and execution results
 
 Active states are `queued`, `leased`, `starting`, `running`, and

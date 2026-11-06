@@ -166,6 +166,14 @@ def build_parser() -> argparse.ArgumentParser:
     fleet.add_argument("fleet_command", choices=["start", "stop", "status"])
     fleet.add_argument("--server", action="append")
     fleet.add_argument("--json", action="store_true", dest="as_json")
+
+    alerts = subparsers.add_parser("alerts", help="manage macOS Worker notifications")
+    alerts.add_argument(
+        "alerts_command",
+        metavar="{enable,disable,status,test}",
+        choices=["enable", "disable", "status", "test", "_check"],
+    )
+    alerts.add_argument("--json", action="store_true", dest="as_json")
     return parser
 
 
@@ -208,6 +216,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         return asyncio.run(_run_skill_command(args))
     if args.command == "server":
         return asyncio.run(_run_server_command(args))
+    if args.command == "alerts":
+        from gpuops.alerts import run_alerts
+
+        try:
+            return run_alerts(args.alerts_command, as_json=args.as_json)
+        except (OSError, RuntimeError, ValueError) as error:
+            print_error(error_payload(error), as_json=args.as_json)
+            return 1
     if args.command == "worker":
         return _run_worker_command(args)
     if args.command == "remote":
@@ -445,7 +461,9 @@ async def _run_control_command(args: argparse.Namespace) -> int:
                 "servers": rows,
             }
         elif args.command == "fleet":
-            rows = await _fleet_action(transport, targets, args.fleet_command)
+            from gpuops.queries import fleet_worker_action
+
+            rows = await fleet_worker_action(transport, targets, args.fleet_command)
             outcome = _aggregate_outcome(
                 sum(1 for row in rows if row["online"]),
                 sum(1 for row in rows if not row["online"]),
@@ -541,20 +559,6 @@ async def _collect_queues(transport, targets, *, full=False):  # type: ignore[no
             }
 
     return list(await asyncio.gather(*(collect(target) for target in targets)))
-
-
-async def _fleet_action(transport, targets, action):  # type: ignore[no-untyped-def]
-    async def execute(target):  # type: ignore[no-untyped-def]
-        try:
-            return {
-                "server_id": target.server_id,
-                "online": True,
-                "result": await transport.worker_command(target, action),
-            }
-        except Exception as error:
-            return {"server_id": target.server_id, "online": False, **error_payload(error)}
-
-    return list(await asyncio.gather(*(execute(target) for target in targets)))
 
 
 async def _locate_job(transport, targets, by_id, run_id, host):  # type: ignore[no-untyped-def]

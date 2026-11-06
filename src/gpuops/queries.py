@@ -1,16 +1,37 @@
-"""Shared multi-server history queries for the CLI and Web console."""
+"""Shared multi-server queries."""
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
+from gpuops.cli_errors import error_payload
 from gpuops.control import RemoteTarget
 from gpuops.history import decode_cursor, encode_cursor
 from gpuops.models import JobSummary
 from gpuops.transport import JobHistory
+
+
+class WorkerCommandTransport(Protocol):
+    async def worker_command(self, target: RemoteTarget, action: str) -> dict[str, Any]: ...
+
+
+async def fleet_worker_action(
+    transport: WorkerCommandTransport, targets: Sequence[RemoteTarget], action: str
+) -> list[dict[str, Any]]:
+    async def execute(target: RemoteTarget) -> dict[str, Any]:
+        try:
+            return {
+                "server_id": target.server_id,
+                "online": True,
+                "result": await transport.worker_command(target, action),
+            }
+        except Exception as error:
+            return {"server_id": target.server_id, "online": False, **error_payload(error)}
+
+    return list(await asyncio.gather(*(execute(target) for target in targets)))
 
 
 class HistoryTransport(Protocol):

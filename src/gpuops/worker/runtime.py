@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import logging
 import os
 import signal
 import subprocess
@@ -20,6 +21,8 @@ from typing import Any, Protocol
 
 from gpuops.models import StrictModel, utc_now
 from gpuops.worker.process_identity import parse_proc_start_ticks, read_procfs_record
+
+logger = logging.getLogger(__name__)
 
 
 class WorkerAlreadyRunning(RuntimeError):
@@ -95,6 +98,12 @@ class RuntimeSampler(Protocol):
     def close(self) -> None: ...
 
 
+class RuntimeNotifier(Protocol):
+    def start(self) -> None: ...
+
+    def close(self) -> None: ...
+
+
 class WorkerFileLock:
     """Non-blocking advisory lock retained for the runtime's full lifetime."""
 
@@ -150,6 +159,7 @@ class WorkerRuntime:
         identity_reader: Callable[[int], ProcessIdentity | None] | None = None,
         stop_event: threading.Event | None = None,
         sampler_factory: Callable[[], RuntimeSampler] | None = None,
+        notifier_factory: Callable[[], RuntimeNotifier] | None = None,
     ):
         if not server_id.strip() or not worker_id.strip():
             raise ValueError("server_id and worker_id cannot be empty")
@@ -166,6 +176,7 @@ class WorkerRuntime:
         self.identity_reader = identity_reader or read_process_identity
         self.stop_event = stop_event or threading.Event()
         self.sampler_factory = sampler_factory
+        self.notifier_factory = notifier_factory
 
     def stop(self) -> None:
         """Request loop shutdown without signalling or inspecting any experiment."""
@@ -201,10 +212,17 @@ class WorkerRuntime:
             )
             write_heartbeat(self.paths.heartbeat_path, heartbeat)
             sampler: RuntimeSampler | None = None
+            notifier: RuntimeNotifier | None = None
             previous_handlers: dict[int, Any] = {}
             try:
                 if self.sampler_factory is not None:
                     sampler = self.sampler_factory()
+                if self.notifier_factory is not None:
+                    try:
+                        notifier = self.notifier_factory()
+                        notifier.start()
+                    except Exception:
+                        logger.warning("Could not start job notifications", exc_info=True)
                 if install_signal_handlers:
                     previous_handlers = self._install_signal_handlers()
                 while not self.stop_event.is_set() and (
@@ -248,6 +266,11 @@ class WorkerRuntime:
                         break
                     self.sleeper(self.interval_seconds)
             finally:
+                if notifier is not None:
+                    try:
+                        notifier.close()
+                    except Exception:
+                        logger.warning("Could not stop job notifications", exc_info=True)
                 try:
                     if sampler is not None:
                         sampler.close()

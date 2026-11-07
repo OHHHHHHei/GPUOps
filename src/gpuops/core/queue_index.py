@@ -122,6 +122,30 @@ class QueueIndex:
         rows = self._query(load_records, query, list(_TERMINAL_STATUSES))
         return [str(row["project"]) for row in rows]
 
+    def terminal_after(
+        self,
+        load_records: Callable[[], list[JobRecord]],
+        after: tuple[datetime, str],
+        *,
+        limit: int = 50,
+    ) -> list[JobSummary]:
+        """Read newly finished jobs oldest first using the existing history index."""
+
+        if limit < 1:
+            raise ValueError("terminal query limit must be positive")
+        finished_at, run_id = after
+        query = (
+            "SELECT * FROM jobs INDEXED BY jobs_history "
+            "WHERE finished_us IS NOT NULL AND status IN (?,?,?) "
+            "AND (finished_us, run_id) > (?, ?) "
+            "ORDER BY finished_us ASC, run_id ASC LIMIT ?"
+        )
+        return self._query_summaries(
+            load_records,
+            query,
+            [*_TERMINAL_STATUSES, _datetime_microseconds(finished_at), run_id, limit],
+        )
+
     def record_written(
         self,
         record: JobRecord,

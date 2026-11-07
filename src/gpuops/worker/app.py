@@ -16,6 +16,7 @@ from gpuops.core.queue import QueueStore
 from gpuops.core.scheduler import Scheduler
 from gpuops.core.storage import StorageBudget
 from gpuops.models import utc_now
+from gpuops.notifications import JobNotifier
 from gpuops.worker.runtime import (
     RuntimePaths,
     WorkerHeartbeat,
@@ -107,6 +108,7 @@ def build_worker_runtime(
         tick=worker.tick,
         interval_seconds=interval_seconds,
         sampler_factory=lambda: AsyncGpuSampler(state, server_id),
+        notifier_factory=lambda: JobNotifier(store, server_id, state),
     )
 
 

@@ -442,6 +442,57 @@ def test_sampler_tick_failure_does_not_skip_worker_tick(tmp_path: Path) -> None:
     assert health["last_tick_error"] == "RuntimeError: sampler unavailable"
 
 
+@pytest.mark.parametrize("fail_at", [None, "create", "start", "close"])
+def test_notifications_share_worker_lifetime_without_affecting_health(
+    tmp_path: Path, fail_at: str | None,
+) -> None:
+    paths = RuntimePaths.from_state_directory(tmp_path / "state")
+    identity = ProcessIdentity(pid=4321, start_time_ticks=9876, boot_id="boot-a")
+    events: list[str] = []
+
+    def event(action: str) -> None:
+        with pytest.raises(WorkerAlreadyRunning), WorkerFileLock(paths.lock_path):
+            pass
+        events.append(action)
+        if action == fail_at:
+            raise RuntimeError("notification service unavailable")
+
+    class Notifier:
+        def start(self) -> None:
+            event("start")
+
+        def close(self) -> None:
+            event("close")
+
+    def factory() -> Notifier:
+        event("create")
+        return Notifier()
+
+    runtime = WorkerRuntime(
+        server_id="gpu01",
+        worker_id="worker-1",
+        paths=paths,
+        tick=lambda: events.append("tick"),
+        interval_seconds=0,
+        clock=lambda: NOW,
+        sleeper=lambda _: None,
+        getpid=lambda: identity.pid,
+        identity_reader=lambda _: identity,
+        notifier_factory=factory,
+    )
+    assert runtime.run_foreground(max_iterations=2, install_signal_handlers=False) == 2
+    assert events == (
+        ["create", "tick", "tick"] if fail_at == "create"
+        else ["create", "start", "tick", "tick", "close"]
+    )
+    health = json.loads(paths.heartbeat_path.read_text())
+    assert health["tick_failures"] == 0
+    assert health["last_tick_error"] is None
+    assert not paths.pid_path.exists()
+    with WorkerFileLock(paths.lock_path):
+        pass
+
+
 def test_foreground_loop_surfaces_task_errors_in_degraded_heartbeat(
     monkeypatch, tmp_path: Path
 ) -> None:

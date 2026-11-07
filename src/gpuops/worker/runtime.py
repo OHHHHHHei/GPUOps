@@ -358,7 +358,7 @@ def read_process_identity(pid: int, proc_root: Path = Path("/proc")) -> ProcessI
 
 
 def write_process_identity(path: Path, identity: ProcessIdentity) -> None:
-    _atomic_write_json(path, asdict(identity))
+    atomic_write_json(path, asdict(identity))
 
 
 def read_stored_process_identity(path: Path) -> ProcessIdentity | None:
@@ -426,7 +426,7 @@ def request_worker_stop(
 
 
 def write_heartbeat(path: Path, heartbeat: WorkerHeartbeat) -> None:
-    _atomic_write_json(path, heartbeat.model_dump(mode="json"))
+    atomic_write_json(path, heartbeat.model_dump(mode="json"))
 
 
 def spawn_detached_worker(
@@ -479,7 +479,9 @@ def spawn_detached_worker(
             stderr_handle.close()
 
 
-def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
+def atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
+    """Write sorted, ASCII-escaped runtime JSON with a trailing newline durably."""
+
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     encoded = (json.dumps(payload, ensure_ascii=True, sort_keys=True) + "\n").encode("utf-8")
     atomic_write_bytes(path, encoded)

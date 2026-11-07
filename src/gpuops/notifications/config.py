@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-import tempfile
 from datetime import datetime
 from email.errors import HeaderParseError
 from email.headerregistry import Address
@@ -10,6 +8,7 @@ from typing import Literal
 
 from pydantic import AwareDatetime, ConfigDict, Field, field_validator, model_validator
 
+from gpuops.file_io import atomic_write_bytes
 from gpuops.models import StrictModel, utc_now
 
 
@@ -115,19 +114,4 @@ def disable(path: Path | None = None) -> NotificationConfig:
 
 def _write_json(path: Path, model: StrictModel) -> None:
     path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
-    fd, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
-    temporary = Path(name)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            os.fchmod(handle.fileno(), 0o600)
-            handle.write(model.model_dump_json(indent=2) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        temporary.replace(path)
-        fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-    finally:
-        temporary.unlink(missing_ok=True)
+    atomic_write_bytes(path, (model.model_dump_json(indent=2) + "\n").encode("utf-8"))

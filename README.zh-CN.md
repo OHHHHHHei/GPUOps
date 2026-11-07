@@ -10,10 +10,10 @@ GPUOps 负责运行已经准备好的实验命令。实验代码、运行环境�
 
 ## 安装
 
-控制端需要 Python 3.10+ 和 OpenSSH（`ssh`、`scp`）。使用 [uv](https://docs.astral.sh/uv/getting-started/installation/) 安装 [v0.2.1](https://github.com/OHHHHHHei/GPUOps/releases/tag/v0.2.1)，包含可选的 Web 控制台：
+控制端需要 Python 3.10+ 和 OpenSSH（`ssh`、`scp`）。使用 [uv](https://docs.astral.sh/uv/getting-started/installation/) 安装 [v0.3.0](https://github.com/OHHHHHHei/GPUOps/releases/tag/v0.3.0)，包含可选的 Web 控制台：
 
 ```bash
-uv tool install 'gpuops[web] @ https://github.com/OHHHHHHei/GPUOps/releases/download/v0.2.1/gpuops-0.2.1-py3-none-any.whl'
+uv tool install 'gpuops[web] @ https://github.com/OHHHHHHei/GPUOps/releases/download/v0.3.0/gpuops-0.3.0-py3-none-any.whl'
 gpuops version --json
 ```
 
@@ -23,7 +23,7 @@ gpuops version --json
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install './gpuops-0.2.1-py3-none-any.whl[web]'
+.venv/bin/python -m pip install './gpuops-0.3.0-py3-none-any.whl[web]'
 .venv/bin/gpuops version --json
 ```
 
@@ -150,6 +150,17 @@ Web 服务只允许绑定回环地址；如需远程访问，请通过可信的�
 结束时间估计（ETA）是可选展示能力。可读取的训练日志可以提供阶段或训练进度，也可以用 `schedule.expected_duration` 为受管任务提供手动估计。对于新编写的训练代码，[结构化进度协议](docs/PROGRESS.md) 提供了简短的标准输出格式，以及不依赖额外包的示例输出函数。
 
 日志缺失、过期或信息不足时，ETA 保持未知。估计时间不会预留 GPU，也不参与调度决策。
+
+## 任务结束邮件
+
+每台服务器只需配置一次 SMTP，即可在受管任务成功、失败或取消时收到邮件。邮件由服务器上的 Worker 发送，控制端离线也能收到，已有任务 JSON 无需修改。
+
+```bash
+gpuops notify configure smtp.json --server gpu-server --json
+gpuops notify test --server gpu-server --json
+```
+
+SMTP 配置示例、状态查询和关闭方法见[任务结束邮件文档](docs/NOTIFICATIONS.md)。
 
 ## 运行边界与维护
 

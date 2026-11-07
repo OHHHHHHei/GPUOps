@@ -11,7 +11,7 @@ Run `gpuops version --json` locally to discover these independent versions:
 
 ```json
 {
-  "version": "0.2.1",
+  "version": "0.3.0",
   "cli_api_version": "gpuops.cli/v1",
   "job_api_version": "gpuops/v1",
   "worker_api_version": "gpuops.worker.rpc/v1"
@@ -85,6 +85,21 @@ observations (`servers`). Each observation has a `server_id` and a `status`:
 `ready`, `stopped`, `not_ready`, or `unknown` when the status query failed.
 Check `checked_at` before treating the observations as current. This command
 reads local state only; use `fleet status` for a fresh query.
+
+`notify configure CONFIG_FILE`, `notify status`, `notify test`, and `notify disable`
+manage optional server-side completion email. With `--json`, they return `ok`,
+`outcome`, and `servers[]`, with `server_id`, `online`, `ok`, and either `result`
+or `error_code`/`error` per server. They use the same target defaults as other
+fleet commands. `configure -` reads SMTP settings from stdin.
+
+Notification status includes `configured`, `enabled`, `enabled_since`, public
+SMTP settings, `cursor`, `retrying_run_id`, `last_error`, `next_attempt_at`,
+`last_sent_at`, `sent_count`, `config_error`, and `state_error`. It reads saved
+configuration and delivery state; it does not prove the Worker is running.
+Credentials are omitted. A test result of `accepted: true` means SMTP accepted
+the message, not that it reached an inbox. See [notification setup](NOTIFICATIONS.md).
+Email is independent of job submission and never changes the job's result or
+Worker readiness.
 
 ## Job lifecycle and execution results
 

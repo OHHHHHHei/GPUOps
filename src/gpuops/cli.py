@@ -174,6 +174,15 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["enable", "disable", "status", "test", "_check"],
     )
     alerts.add_argument("--json", action="store_true", dest="as_json")
+
+    notify = subparsers.add_parser("notify", help="manage server-side job email notifications")
+    notification_commands = notify.add_subparsers(dest="notify_action", required=True)
+    for action in ("configure", "status", "test", "disable"):
+        command = notification_commands.add_parser(action)
+        if action == "configure":
+            command.add_argument("config_file", help="SMTP settings JSON file, or - for stdin")
+        command.add_argument("--server", action="append")
+        command.add_argument("--json", action="store_true", dest="as_json")
     return parser
 
 
@@ -216,6 +225,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return asyncio.run(_run_skill_command(args))
     if args.command == "server":
         return asyncio.run(_run_server_command(args))
+    if args.command == "notify":
+        from gpuops.notifications.commands import run_notification_command
+
+        return asyncio.run(run_notification_command(args))
     if args.command == "alerts":
         from gpuops.alerts import run_alerts
 

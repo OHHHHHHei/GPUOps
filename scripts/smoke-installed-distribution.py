@@ -166,6 +166,15 @@ verified = subprocess.run(
 remote = json.loads(verified.stdout)
 assert remote["version"] == gpuops.__version__
 assert str(release) in remote["module"], remote
+notification_status = subprocess.run(
+    [str(remote_python), "-m", "gpuops.notifications.commands", "status",
+     "--server-id", "smoke-local"],
+    text=True, capture_output=True, cwd=workspace, check=True,
+    env={**os.environ, "HOME": str(home)},
+)
+notification = json.loads(notification_status.stdout)
+assert notification["ok"] and not notification["result"]["enabled"]
+assert not (home / ".config/gpuops/notifications.json").exists()
 if legacy_pip:
     assert remote["pip_version"] == "22.0.2", remote
     print("source deployment with pip 22.0.2 passed")

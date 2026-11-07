@@ -142,23 +142,42 @@ def test_worker_status_is_machine_readable(capsys, tmp_path) -> None:
     }
 
 
-def test_worker_rejects_non_positive_interval(capsys, tmp_path) -> None:
-    result = main(
-        [
-            "worker",
-            "run",
-            "--server-id",
-            "gpu01",
-            "--state-dir",
-            str(tmp_path),
-            "--interval",
-            "0",
-            "--once",
-        ]
-    )
+@pytest.mark.parametrize("command", ["run", "start"])
+@pytest.mark.parametrize("interval", ["0", "-1"])
+@pytest.mark.parametrize("as_json", [False, True])
+def test_worker_rejects_non_positive_interval(
+    command, interval, as_json, monkeypatch, capsys, tmp_path
+) -> None:
+    def unexpected_start(**kwargs):
+        pytest.fail("an invalid interval must not start a Worker")
 
-    assert result == 2
-    assert "interval must be positive" in capsys.readouterr().err
+    monkeypatch.setattr(f"gpuops.worker.app.{command}_worker", unexpected_start)
+    arguments = [
+        "worker",
+        command,
+        "--server-id",
+        "gpu01",
+        "--state-dir",
+        str(tmp_path / "state"),
+        "--interval",
+        interval,
+    ]
+    if as_json:
+        arguments.append("--json")
+
+    assert main(arguments) == 2
+    captured = capsys.readouterr()
+    if as_json:
+        assert json.loads(captured.out) == {
+            "ok": False,
+            "error_code": "invalid_argument",
+            "error": "--interval must be positive",
+        }
+        assert captured.err == ""
+    else:
+        assert captured.out == ""
+        assert captured.err == "gpuops: --interval must be positive\n"
+    assert not (tmp_path / "state").exists()
 
 
 def test_remote_rpc_reads_one_json_request(monkeypatch, capsys, tmp_path) -> None:

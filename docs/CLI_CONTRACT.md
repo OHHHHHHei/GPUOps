@@ -55,6 +55,12 @@ machine-readable category. Known codes include `invalid_argument`,
 `job_not_found`, `storage_quota_exceeded`, and `io_error`. Other codes remain
 possible; automatic retry is not implied by an unfamiliar code.
 
+For `worker run` and `worker start`, a zero or negative `--interval` is rejected
+before starting a Worker. With `--json`, stdout contains
+`{"ok": false, "error_code": "invalid_argument", "error": "--interval must be positive"}`,
+stderr is empty, and the exit status is 2. Without `--json`, the same error is
+printed as human-readable text on stderr.
+
 ## Core operations
 
 | Command with `--json` | Stable result fields / shape | Interpretation |

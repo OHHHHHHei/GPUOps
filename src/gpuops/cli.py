@@ -617,7 +617,10 @@ def _run_worker_command(args: argparse.Namespace) -> int:
 
     state_directory = args.state_dir or DEFAULT_STATE_DIRECTORY
     if getattr(args, "interval", 1) <= 0:
-        print("gpuops: --interval must be positive", file=sys.stderr)
+        print_error(
+            error_payload(CommandError("invalid_argument", "--interval must be positive")),
+            as_json=args.as_json,
+        )
         return 2
     try:
         if args.worker_command == "run":

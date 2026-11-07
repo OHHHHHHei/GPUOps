@@ -8,7 +8,6 @@ import logging
 import os
 import signal
 import subprocess
-import tempfile
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -19,6 +18,7 @@ from pathlib import Path
 from types import FrameType
 from typing import Any, BinaryIO, Protocol
 
+from gpuops.file_io import atomic_write_bytes
 from gpuops.models import StrictModel, utc_now
 from gpuops.worker.process_identity import parse_proc_start_ticks, read_procfs_record
 
@@ -481,25 +481,8 @@ def spawn_detached_worker(
 
 def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=True, sort_keys=True)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(temporary_name, 0o600)
-        os.replace(temporary_name, path)
-        directory_descriptor = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_descriptor)
-        finally:
-            os.close(directory_descriptor)
-    finally:
-        if os.path.exists(temporary_name):
-            os.unlink(temporary_name)
+    encoded = (json.dumps(payload, ensure_ascii=True, sort_keys=True) + "\n").encode("utf-8")
+    atomic_write_bytes(path, encoded)
 
 
 def _read_json_object(path: Path) -> dict[str, Any] | None:

@@ -7,7 +7,6 @@ import fcntl
 import hashlib
 import json
 import os
-import tempfile
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -18,6 +17,7 @@ from typing import Protocol
 
 from gpuops.contracts import RunId, is_valid_run_id
 from gpuops.core.resources import ServerResourceSnapshot
+from gpuops.file_io import atomic_write_bytes
 from gpuops.models import (
     JobRecord,
     JobSpec,
@@ -274,38 +274,19 @@ class SubmissionJournal:
 
     def _write_unlocked(self, entry: JournalEntry) -> None:
         target = self._path(entry.run_id)
-        descriptor, temporary_name = tempfile.mkstemp(
-            dir=self.directory,
-            prefix=f".{entry.run_id}.",
-            suffix=".tmp",
+        absent_results = (
+            {
+                field
+                for field in ("exit_code", "launch_error")
+                if getattr(entry.remote_record, field) is None
+            }
+            if entry.remote_record is not None
+            else set()
         )
-        try:
-            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                absent_results = (
-                    {
-                        field
-                        for field in ("exit_code", "launch_error")
-                        if getattr(entry.remote_record, field) is None
-                    }
-                    if entry.remote_record is not None
-                    else set()
-                )
-                handle.write(
-                    entry.model_dump_json(indent=2, exclude={"remote_record": absent_results})
-                )
-                handle.write("\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.chmod(temporary_name, 0o600)
-            os.replace(temporary_name, target)
-            directory_descriptor = os.open(self.directory, os.O_RDONLY)
-            try:
-                os.fsync(directory_descriptor)
-            finally:
-                os.close(directory_descriptor)
-        finally:
-            if os.path.exists(temporary_name):
-                os.unlink(temporary_name)
+        payload = (
+            entry.model_dump_json(indent=2, exclude={"remote_record": absent_results}) + "\n"
+        ).encode("utf-8")
+        atomic_write_bytes(target, payload, prefix=f".{entry.run_id}.")
 
     @contextmanager
     def _lock(self) -> Iterator[None]:

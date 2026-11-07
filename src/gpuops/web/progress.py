@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import re
 import statistics
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from gpuops.web.structured_progress import estimate as estimate_structured
@@ -24,6 +25,17 @@ BAR = re.compile(
 EPOCH_DURATION = re.compile(
     r"\b(?:epoch_seconds|seconds|elapsed_sec)\s*[:=]\s*(\d+(?:\.\d+)?)\b", re.I
 )
+
+
+@dataclass
+class _LegacyEvidence:
+    epochs: int | None
+    total_steps: int | None
+    epoch_points: list[tuple[int, float]]
+    step_points: list[tuple[int, float, int, str]]
+    epoch_durations: list[tuple[int, float, int]]
+    bar: tuple[re.Match[str], float | None, int] | None
+    last_line_index: int
 
 
 def unknown(reason: str) -> dict:
@@ -72,27 +84,40 @@ def estimate(sample: dict, process: dict, path: str, *, now: float) -> dict:
     if log.get("error"):
         return unknown("日志不可读取")
     content = ANSI.sub("", log["content"])
+    started_at = process["started_at"]
+    sampled_at = sample["sampled_at"]
     structured = estimate_structured(
         content,
         path=path,
-        started_at=float(process["started_at"]),
-        sampled_at=float(sample["sampled_at"]),
+        started_at=float(started_at),
+        sampled_at=float(sampled_at),
         now=float(now),
     )
     if structured is not None:
         return structured
-    modified = log["modified_at"]
-    if modified is not None and modified < process["started_at"] - 2:
+
+    modified_at = log["modified_at"]
+    if modified_at is not None and modified_at < started_at - 2:
         return unknown("日志早于当前进程，无法确认属于本次训练")
-    if modified is not None and modified > sample["sampled_at"] + 5:
+    if modified_at is not None and modified_at > sampled_at + 5:
         return unknown("日志时间异常")
+    evidence = _collect_legacy_evidence(content, sample, process)
+    if isinstance(evidence, str):
+        return unknown(evidence)
+    return _estimate_legacy(
+        evidence, path=path, modified_at=modified_at, sampled_at=sampled_at, now=now
+    )
+
+
+def _collect_legacy_evidence(content: str, sample: dict, process: dict) -> _LegacyEvidence | str:
+    """Gather progress points, or return the reason this log cannot be used."""
     argv = process["argv"]
     epochs = _total(argv, content, "epoch")
     total_steps = _total(argv, content, "step")
     epoch_points: list[tuple[int, float]] = []
     step_points: list[tuple[int, float, int, str]] = []
     epoch_durations: list[tuple[int, float, int]] = []
-    bar = None
+    bar: tuple[re.Match[str], float | None, int] | None = None
     training_finished = False
     lines = [line for line in re.split(r"[\r\n]+", content) if line.strip()]
     for line_index, line in enumerate(lines):
@@ -119,7 +144,7 @@ def estimate(sample: dict, process: dict, path: str, *, now: float) -> dict:
                 and duration_point[0] == epoch_durations[-1][0]
                 and duration_point[1] != epoch_durations[-1][1]
             ):
-                return unknown("同一 epoch 有多组耗时，无法确认属于同一训练")
+                return "同一 epoch 有多组耗时，无法确认属于同一训练"
             if not epoch_durations or duration_point[0] != epoch_durations[-1][0]:
                 epoch_durations.append(duration_point)
         # A header saying "Epoch 3" does not prove that epoch 3 has finished.
@@ -147,8 +172,33 @@ def estimate(sample: dict, process: dict, path: str, *, now: float) -> dict:
             bar = (progress_bar, timestamp, line_index)
 
     if training_finished:
-        return unknown("日志显示训练已结束，进程可能仍在收尾")
-    current, total, seconds, observed, scope, basis = 0, 0, 0.0, modified, "phase", ""
+        return "日志显示训练已结束，进程可能仍在收尾"
+    return _LegacyEvidence(
+        epochs=epochs,
+        total_steps=total_steps,
+        epoch_points=epoch_points,
+        step_points=step_points,
+        epoch_durations=epoch_durations,
+        bar=bar,
+        last_line_index=len(lines) - 1,
+    )
+
+
+def _estimate_legacy(
+    evidence: _LegacyEvidence,
+    *,
+    path: str,
+    modified_at: float | None,
+    sampled_at: float,
+    now: float,
+) -> dict:
+    epochs = evidence.epochs
+    epoch_points = evidence.epoch_points
+    epoch_durations = evidence.epoch_durations
+    step_points = evidence.step_points
+    seconds = 0.0
+    observed = modified_at
+    scope = "phase"
     if epochs and len(epoch_points) >= 2:
         current, observed = epoch_points[-1]
         total = epochs
@@ -161,7 +211,7 @@ def estimate(sample: dict, process: dict, path: str, *, now: float) -> dict:
             seconds = statistics.median(cycles[-3:])
         scope = "training"
         basis = f"已完成 {current}/{total} epoch · 近期约 {seconds / 60:.1f} 分/轮"
-    elif epochs and epoch_durations and epoch_durations[-1][2] == len(lines) - 1:
+    elif epochs and epoch_durations and epoch_durations[-1][2] == evidence.last_line_index:
         current = epoch_durations[-1][0]
         total = epochs
         seconds = statistics.median([point[1] for point in epoch_durations[-3:]])
@@ -176,18 +226,20 @@ def estimate(sample: dict, process: dict, path: str, *, now: float) -> dict:
         ]
         if cycles:
             seconds = statistics.median(cycles[-5:])
-        scope = "training" if name.startswith("global") or total_steps == total else "phase"
+        scope = (
+            "training" if name.startswith("global") or evidence.total_steps == total else "phase"
+        )
         basis = f"{current}/{total} step · 近期约 {seconds:.2f} 秒/步"
-    elif bar:
-        match, timestamp, line_index = bar
-        if timestamp is None and line_index != len(lines) - 1:
+    elif evidence.bar:
+        match, timestamp, line_index = evidence.bar
+        if timestamp is None and line_index != evidence.last_line_index:
             return unknown("进度条之后还有输出，无法确定进度更新时间")
         current, total = int(match[1]), int(match[2])
         speed = float(match[5])
         seconds = (1 / speed if match[6].lower() == "it/s" else speed) if speed > 0 else 0
         # Untimestamped bars are anchored to the file update, never the time of each poll.
-        observed = timestamp if timestamp is not None else modified
-        if total_steps == total and re.search(r"train|global", lines[line_index], re.I):
+        observed = timestamp if timestamp is not None else modified_at
+        if evidence.total_steps == total and re.search(r"train|global", match.string, re.I):
             scope = "training"
         basis = f"进度条 {current}/{total} · {speed:g} {match[6]}"
     else:
@@ -219,7 +271,7 @@ def estimate(sample: dict, process: dict, path: str, *, now: float) -> dict:
         "basis": basis,
         "source": path,
         "observed_at": datetime.fromtimestamp(observed, timezone.utc).isoformat(),
-        "sampled_at": datetime.fromtimestamp(sample["sampled_at"], timezone.utc).isoformat(),
+        "sampled_at": datetime.fromtimestamp(sampled_at, timezone.utc).isoformat(),
         "reason": (
             "当前训练估计，不包含后续任务" if scope == "training" else "仅当前阶段，总训练时长未知"
         ),

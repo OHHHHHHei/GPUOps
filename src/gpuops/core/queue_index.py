@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from gpuops.core.storage import StorageBudget, StorageQuotaExceeded
+from gpuops.file_io import fsync_directory
 from gpuops.models import PRIORITY_ORDER, JobRecord, JobStatus, JobSummary
 
 INDEX_SCHEMA_VERSION = 1
@@ -286,7 +287,7 @@ class QueueIndex:
                 with temporary_path.open("rb") as handle:
                     os.fsync(handle.fileno())
                 os.replace(temporary_path, self.path)
-                _fsync_directory(self.root)
+                fsync_directory(self.root)
             finally:
                 with suppress(FileNotFoundError):
                     temporary_path.unlink()
@@ -492,11 +493,3 @@ def _datetime_microseconds(value: datetime) -> int:
 
 def _timedelta_microseconds(value: timedelta) -> int:
     return value.days * 86_400_000_000 + value.seconds * 1_000_000 + value.microseconds
-
-
-def _fsync_directory(directory: Path) -> None:
-    descriptor = os.open(directory, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)

@@ -11,7 +11,7 @@ from typing import Any
 
 from gpuops.worker.devices import GpuDevice
 from gpuops.worker.probe import LocalGpuProbe
-from gpuops.worker.runtime import _atomic_write_json
+from gpuops.worker.runtime import atomic_write_json
 
 DEVICE_QUERY_BUDGET_SECONDS = 6.0
 
@@ -47,7 +47,7 @@ def run_sample(
     }
     if sample.error_code is not None:
         payload["error"] = sample.snapshot.error or "GPU query failed"
-    _atomic_write_json(result_path, payload)
+    atomic_write_json(result_path, payload)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

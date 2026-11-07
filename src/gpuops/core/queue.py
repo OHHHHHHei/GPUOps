@@ -16,7 +16,7 @@ from gpuops.contracts import is_valid_run_id
 from gpuops.core.queue_index import QueueIndex
 from gpuops.core.state_machine import ensure_transition
 from gpuops.core.storage import StorageBudget
-from gpuops.file_io import atomic_write_bytes
+from gpuops.file_io import atomic_write_bytes, fsync_directory
 from gpuops.models import (
     PRIORITY_ORDER,
     Allocation,
@@ -206,7 +206,7 @@ class QueueStore:
 
         if self.event_archive_count == 0:
             self.events_path.unlink(missing_ok=True)
-            self._fsync_directory(self.root)
+            fsync_directory(self.root)
             return
 
         sequence = self._current_event_sequence_unlocked()
@@ -231,8 +231,8 @@ class QueueStore:
             os.replace(temporary_name, archive)
             self.events_path.unlink()
             self._prune_event_archives_unlocked()
-            self._fsync_directory(self.event_archive_directory)
-            self._fsync_directory(self.root)
+            fsync_directory(self.event_archive_directory)
+            fsync_directory(self.root)
         finally:
             if os.path.exists(temporary_name):
                 os.unlink(temporary_name)
@@ -269,14 +269,6 @@ class QueueStore:
         archives = sorted(self.event_archive_directory.glob("events-*.jsonl.gz"))
         for archive in archives[: -self.event_archive_count]:
             archive.unlink(missing_ok=True)
-
-    @staticmethod
-    def _fsync_directory(directory: Path) -> None:
-        directory_fd = os.open(directory, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
 
     def enqueue(
         self,

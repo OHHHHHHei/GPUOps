@@ -20,7 +20,7 @@ from typing import Any
 from gpuops.core.resources import GpuResource, ServerResourceSnapshot
 from gpuops.models import utc_now
 from gpuops.worker.devices import GpuDevice, discover_devices
-from gpuops.worker.runtime import _atomic_write_json
+from gpuops.worker.runtime import atomic_write_json
 
 CACHE_NAME = "gpu-sample.json"
 LOCK_NAME = "gpu-sample.lock"
@@ -381,7 +381,7 @@ class AsyncGpuSampler:
                 error=f"GPU discovery failed: {self._inventory_error}",
                 gpus=[],
             )
-            _atomic_write_json(
+            atomic_write_json(
                 self.cache_path,
                 {
                     "snapshot": snapshot.model_dump(mode="json"),
@@ -469,7 +469,7 @@ class AsyncGpuSampler:
                 previous = old_snapshot.model_copy(update={"gpus": previous_gpus}).model_dump(
                     mode="json"
                 )
-        _atomic_write_json(
+        atomic_write_json(
             self.cache_path,
             {
                 "snapshot": snapshot.model_dump(mode="json"),

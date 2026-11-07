@@ -16,6 +16,7 @@ from gpuops.contracts import is_valid_run_id
 from gpuops.core.queue_index import QueueIndex
 from gpuops.core.state_machine import ensure_transition
 from gpuops.core.storage import StorageBudget
+from gpuops.file_io import atomic_write_bytes
 from gpuops.models import (
     PRIORITY_ORDER,
     Allocation,
@@ -135,29 +136,12 @@ class QueueStore:
         payload = (record.model_dump_json(indent=2, exclude=absent_results) + "\n").encode("utf-8")
         self.storage.ensure_capacity(additional_bytes=len(payload))
         previous_signature = self.index.signature()
-        file_descriptor, temporary_name = tempfile.mkstemp(
-            dir=self.jobs_directory, prefix=f".{record.run_id}.", suffix=".tmp"
+        atomic_write_bytes(target, payload, prefix=f".{record.run_id}.")
+        self.index.record_written(
+            record,
+            previous_signature=previous_signature,
+            current_signature=self.index.signature(),
         )
-        try:
-            with os.fdopen(file_descriptor, "wb") as handle:
-                handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.chmod(temporary_name, 0o600)
-            os.replace(temporary_name, target)
-            directory_fd = os.open(self.jobs_directory, os.O_RDONLY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
-            self.index.record_written(
-                record,
-                previous_signature=previous_signature,
-                current_signature=self.index.signature(),
-            )
-        finally:
-            if os.path.exists(temporary_name):
-                os.unlink(temporary_name)
 
     def _reserve_event_sequence_unlocked(self) -> int:
         try:
@@ -173,22 +157,7 @@ class QueueStore:
     def _atomic_text_write_unlocked(self, target: Path, contents: str) -> None:
         encoded = contents.encode("utf-8")
         self.storage.ensure_capacity(additional_bytes=len(encoded))
-        file_descriptor, temporary_name = tempfile.mkstemp(
-            dir=target.parent,
-            prefix=f".{target.name}.",
-            suffix=".tmp",
-        )
-        try:
-            with os.fdopen(file_descriptor, "wb") as handle:
-                handle.write(encoded)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.chmod(temporary_name, 0o600)
-            os.replace(temporary_name, target)
-            self._fsync_directory(target.parent)
-        finally:
-            if os.path.exists(temporary_name):
-                os.unlink(temporary_name)
+        atomic_write_bytes(target, encoded)
 
     def _append_event_unlocked(
         self,

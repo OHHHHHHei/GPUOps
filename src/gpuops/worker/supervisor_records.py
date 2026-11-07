@@ -5,7 +5,6 @@ from __future__ import annotations
 import fcntl
 import json
 import os
-import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -13,6 +12,8 @@ from pathlib import Path
 from typing import Any
 
 from gpuops.contracts import is_valid_run_id
+from gpuops.file_io import atomic_write_bytes
+from gpuops.file_io import fsync_directory as fsync_directory
 
 SCHEMA_VERSION = "gpuops-supervisor/v1"
 
@@ -228,29 +229,10 @@ def read_optional_json(path: Path) -> dict[str, Any] | None:
 
 
 def atomic_write_json(path: Path, value: Mapping[str, Any]) -> None:
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(value, handle, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(temporary_name, 0o600)
-        os.replace(temporary_name, path)
-        fsync_directory(path.parent)
-    finally:
-        if os.path.exists(temporary_name):
-            os.unlink(temporary_name)
-
-
-def fsync_directory(directory: Path) -> None:
-    descriptor = os.open(directory, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
+    payload = (
+        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode("utf-8")
+    atomic_write_bytes(path, payload)
 
 
 def parse_aware_datetime(value: Any, field_name: str) -> datetime:

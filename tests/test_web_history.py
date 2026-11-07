@@ -34,13 +34,14 @@ class LocalRpcSsh:
 
 
 @pytest.fixture
-def fleet(tmp_path):
+def fleet(tmp_path, request):
+    jobs_per_worker = getattr(request, "param", 0)
     workers = {
         server: WorkerRpc(tmp_path / server, server_id=server, clock=lambda: NOW)
         for server in ("gpu01", "gpu02")
     }
     for server, worker in workers.items():
-        for i in range(63):
+        for i in range(jobs_per_worker):
             spec = JobSpec(
                 id=f"job-{i:03}",
                 project="even" if i % 2 == 0 else "odd",
@@ -50,7 +51,7 @@ def fleet(tmp_path):
                 resources={"host": server},
             )
             record = worker.queue.enqueue(spec, run_id=f"run-{i:03}", now=NOW)
-            if i < 62:
+            if i < jobs_per_worker - 1:
                 worker.queue.request_cancel(record.run_id, now=NOW + timedelta(seconds=i // 2))
         # Any accidentally unfiltered web list would now fail this integration test.
         original_list = worker.queue.list
@@ -71,11 +72,12 @@ def fleet(tmp_path):
         yield client, ssh, workers
 
 
+@pytest.mark.parametrize("fleet", [2], indirect=True)
 def test_active_summary_excludes_terminal_and_execution_payload(fleet):
     client, ssh, _workers = fleet
     payload = client.get("/api/v1/queue").json()
     assert len(payload["items"]) == 2
-    assert {item["id"] for item in payload["items"]} == {"run-062"}
+    assert {item["id"] for item in payload["items"]} == {"run-001"}
     assert all("command" not in item and "env" not in item for item in payload["items"])
     assert all(request["params"]["summary"] for _host, request in ssh.calls)
     assert all(
@@ -85,6 +87,7 @@ def test_active_summary_excludes_terminal_and_execution_payload(fleet):
     )
 
 
+@pytest.mark.parametrize("fleet", [63], indirect=True)
 def test_global_history_pages_handle_ties_and_new_completions(fleet):
     client, ssh, workers = fleet
     first = client.get("/api/v1/history").json()
@@ -104,21 +107,30 @@ def test_global_history_pages_handle_ties_and_new_completions(fleet):
     assert all(request["params"]["limit"] == 51 for _host, request in ssh.calls)
 
 
+@pytest.mark.parametrize("fleet", [6], indirect=True)
 def test_project_filter_is_remote_and_keeps_project_options(fleet):
     client, ssh, _workers = fleet
-    payload = client.get("/api/v1/history", params={"project": "odd"}).json()
-    assert len(payload["items"]) == 50
-    assert {item["project"] for item in payload["items"]} == {"odd"}
-    assert payload["projects"] == ["even", "odd"]
+    params = {"project": "odd", "limit": 2}
+    first = client.get("/api/v1/history", params=params).json()
+    cursor = first["next_cursor"]
+    assert cursor is not None
+    last = client.get("/api/v1/history", params={**params, "cursor": cursor}).json()
+    assert last["next_cursor"] is None
+    assert len(first["items"]) == len(last["items"]) == 2
+    items = first["items"] + last["items"]
+    assert {item["project"] for item in items} == {"odd"}
+    assert first["projects"] == last["projects"] == ["even", "odd"]
     assert all(request["params"]["project"] == "odd" for _host, request in ssh.calls)
-    assert all("command" not in item for item in payload["items"])
+    assert all("command" not in item for item in items)
 
 
+@pytest.mark.parametrize("fleet", [4], indirect=True)
 def test_offline_history_is_visible_and_does_not_issue_a_skipping_cursor(fleet):
     client, ssh, _workers = fleet
     ssh.offline.add("gpu02")
-    payload = client.get("/api/v1/history").json()
-    assert len(payload["items"]) == 50
+    # The online worker has one more terminal job than fits on the page.
+    payload = client.get("/api/v1/history", params={"limit": 2}).json()
+    assert len(payload["items"]) == 2
     assert payload["next_cursor"] is None
     assert not payload["servers"][1]["online"]
     assert "worker offline" in payload["servers"][1]["error"]

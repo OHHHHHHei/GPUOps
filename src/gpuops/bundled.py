@@ -33,10 +33,7 @@ def _read(group: str, name: str, source_path: str) -> str:
 
 def agent_files() -> dict[str, str]:
     """Return the portable skill and its guides, keyed by skill-relative paths."""
-    return {
-        name: _read("agent", name, source_path)
-        for name, source_path in _AGENT_FILES.items()
-    }
+    return {name: _read("agent", name, source_path) for name, source_path in _AGENT_FILES.items()}
 
 
 def project_files() -> dict[str, str]:

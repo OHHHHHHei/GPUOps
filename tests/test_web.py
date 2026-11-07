@@ -150,13 +150,24 @@ def test_web_refreshes_expired_sample_before_reporting_stale(monkeypatch, host_r
             sampled_at = now
             if host_recovered and self.calls > 1:
                 sampled_at += timedelta(seconds=10)
-            return [ServerResult(
-                server=ServerTarget("gpu01", "gpu01", "gpu01"), online=True,
-                data={"collected_at": sampled_at.isoformat(), "gpus": [{
-                    "index": 0, "utilization.gpu": 0, "memory.used": 0,
-                    "memory.total": 24576, "processes": [],
-                }]},
-            )]
+            return [
+                ServerResult(
+                    server=ServerTarget("gpu01", "gpu01", "gpu01"),
+                    online=True,
+                    data={
+                        "collected_at": sampled_at.isoformat(),
+                        "gpus": [
+                            {
+                                "index": 0,
+                                "utilization.gpu": 0,
+                                "memory.used": 0,
+                                "memory.total": 24576,
+                                "processes": [],
+                            }
+                        ],
+                    },
+                )
+            ]
 
     class LaterDatetime(datetime):
         @classmethod
@@ -210,13 +221,24 @@ def test_five_second_polls_keep_healthy_ten_second_samples_online(web_clock) -> 
             # Reproduce the live phase: the host's sample is already 9s old on first read.
             age = (9 + web_clock.seconds) % 10
             sampled_at = web_clock.now() - timedelta(seconds=age)
-            return [ServerResult(
-                server=ServerTarget("gpu02", "gpu02", "gpu02"), online=True,
-                data={"collected_at": sampled_at.isoformat(), "gpus": [{
-                    "index": 0, "utilization.gpu": 0, "memory.used": 0,
-                    "memory.total": 24576, "processes": [],
-                }]},
-            )]
+            return [
+                ServerResult(
+                    server=ServerTarget("gpu02", "gpu02", "gpu02"),
+                    online=True,
+                    data={
+                        "collected_at": sampled_at.isoformat(),
+                        "gpus": [
+                            {
+                                "index": 0,
+                                "utilization.gpu": 0,
+                                "memory.used": 0,
+                                "memory.total": 24576,
+                                "processes": [],
+                            }
+                        ],
+                    },
+                )
+            ]
 
     monitor = Monitor()
     provider = LiveProvider(monitor, expected_gpu_count=1)
@@ -251,14 +273,25 @@ def test_five_second_polls_tolerate_small_host_clock_offset(
             sampled_at = web_clock.now() + timedelta(
                 seconds=clock_offset_seconds - web_clock.seconds % 10
             )
-            return [ServerResult(
-                server=ServerTarget("gpu02", "gpu02", "gpu02"), online=True,
-                data={"collected_at": sampled_at.isoformat(), "gpus": [{
-                    "index": 0, "sampled_at": sampled_at.isoformat(),
-                    "utilization.gpu": 0, "memory.used": 0,
-                    "memory.total": 24576, "processes": [],
-                }]},
-            )]
+            return [
+                ServerResult(
+                    server=ServerTarget("gpu02", "gpu02", "gpu02"),
+                    online=True,
+                    data={
+                        "collected_at": sampled_at.isoformat(),
+                        "gpus": [
+                            {
+                                "index": 0,
+                                "sampled_at": sampled_at.isoformat(),
+                                "utilization.gpu": 0,
+                                "memory.used": 0,
+                                "memory.total": 24576,
+                                "processes": [],
+                            }
+                        ],
+                    },
+                )
+            ]
 
     monitor = Monitor()
     provider = LiveProvider(monitor, expected_gpu_count=1)
@@ -291,20 +324,39 @@ def test_failed_cache_coalesces_requests_and_recovers_by_next_poll(web_clock, er
             # Let concurrent endpoints enter the lock while collection is in flight.
             await asyncio.sleep(0)
             healthy = ServerResult(
-                server=ServerTarget("gpu02", "gpu02", "gpu02"), online=True,
-                data={"collected_at": web_clock.now().isoformat(), "gpus": [{
-                    "index": 0, "utilization.gpu": 0, "memory.used": 0,
-                    "memory.total": 24576, "processes": [],
-                }]},
+                server=ServerTarget("gpu02", "gpu02", "gpu02"),
+                online=True,
+                data={
+                    "collected_at": web_clock.now().isoformat(),
+                    "gpus": [
+                        {
+                            "index": 0,
+                            "utilization.gpu": 0,
+                            "memory.used": 0,
+                            "memory.total": 24576,
+                            "processes": [],
+                        }
+                    ],
+                },
             )
             if self.calls == 1:
-                return [ServerResult(
-                    server=ServerTarget("gpu01", "gpu01", "gpu01"), online=False,
-                    error="sample unavailable", error_code=error_code,
-                ), healthy]
-            return [ServerResult(
-                server=ServerTarget("gpu01", "gpu01", "gpu01"), online=True, data=healthy.data,
-            ), healthy]
+                return [
+                    ServerResult(
+                        server=ServerTarget("gpu01", "gpu01", "gpu01"),
+                        online=False,
+                        error="sample unavailable",
+                        error_code=error_code,
+                    ),
+                    healthy,
+                ]
+            return [
+                ServerResult(
+                    server=ServerTarget("gpu01", "gpu01", "gpu01"),
+                    online=True,
+                    data=healthy.data,
+                ),
+                healthy,
+            ]
 
     monitor = Monitor()
     provider = LiveProvider(monitor, expected_gpu_count=1)
@@ -560,8 +612,13 @@ def test_live_provider_isolates_card_errors_and_recovers_quickly(web_clock) -> N
             else gpu(
                 i,
                 **(
-                    {"utilization.gpu": None, "memory.used": None, "processes": None,
-                     "error": "NVML query failed", "error_code": "gpu_query_failed"}
+                    {
+                        "utilization.gpu": None,
+                        "memory.used": None,
+                        "processes": None,
+                        "error": "NVML query failed",
+                        "error_code": "gpu_query_failed",
+                    }
                     if i == 3
                     else {"error": "GPU sample is stale", "error_code": "telemetry_stale"}
                 ),
@@ -590,7 +647,12 @@ def test_live_provider_isolates_card_errors_and_recovers_quickly(web_clock) -> N
     assert server["stale"] is False
     assert server["error"] is None
     assert degraded["summary"] == {
-        "total": 8, "idle": 6, "busy": 0, "residual": 0, "unknown": 2, "offline": 0,
+        "total": 8,
+        "idle": 6,
+        "busy": 0,
+        "residual": 0,
+        "unknown": 2,
+        "offline": 0,
     }
     assert by_index[3]["status"] == "unknown"
     assert by_index[3]["memory_total_mib"] == 24576
@@ -609,15 +671,25 @@ def test_stale_card_timestamp_cannot_be_reported_idle(web_clock) -> None:
 
     class Monitor:
         async def collect_all(self):
-            return [ServerResult(
-                server=ServerTarget("gpu01", "gpu01", "gpu01"),
-                online=True,
-                data={"collected_at": web_clock.now().isoformat(), "gpus": [{
-                    "index": 0, "sampled_at": old.isoformat(),
-                    "utilization.gpu": 0, "memory.used": 0,
-                    "memory.total": 24576, "processes": [],
-                }]},
-            )]
+            return [
+                ServerResult(
+                    server=ServerTarget("gpu01", "gpu01", "gpu01"),
+                    online=True,
+                    data={
+                        "collected_at": web_clock.now().isoformat(),
+                        "gpus": [
+                            {
+                                "index": 0,
+                                "sampled_at": old.isoformat(),
+                                "utilization.gpu": 0,
+                                "memory.used": 0,
+                                "memory.total": 24576,
+                                "processes": [],
+                            }
+                        ],
+                    },
+                )
+            ]
 
     snapshot = asyncio.run(LiveProvider(Monitor(), expected_gpu_count=1).get_snapshot())
     assert snapshot["servers"][0]["stale"] is False
@@ -630,11 +702,19 @@ def test_stale_card_timestamp_cannot_be_reported_idle(web_clock) -> None:
 def test_timestamp_more_than_five_seconds_ahead_remains_unusable(web_clock, future_field) -> None:
     now = web_clock.now().isoformat()
     future = (web_clock.now() + timedelta(seconds=6)).isoformat()
-    data = {"collected_at": now, "gpus": [{
-        "index": 0, "sampled_at": now,
-        "utilization.gpu": 0, "memory.used": 0,
-        "memory.total": 24576, "processes": [],
-    }]}
+    data = {
+        "collected_at": now,
+        "gpus": [
+            {
+                "index": 0,
+                "sampled_at": now,
+                "utilization.gpu": 0,
+                "memory.used": 0,
+                "memory.total": 24576,
+                "processes": [],
+            }
+        ],
+    }
     if future_field == "collected_at":
         data["collected_at"] = future
     else:
@@ -642,9 +722,13 @@ def test_timestamp_more_than_five_seconds_ahead_remains_unusable(web_clock, futu
 
     class Monitor:
         async def collect_all(self):
-            return [ServerResult(
-                server=ServerTarget("gpu01", "gpu01", "gpu01"), online=True, data=data,
-            )]
+            return [
+                ServerResult(
+                    server=ServerTarget("gpu01", "gpu01", "gpu01"),
+                    online=True,
+                    data=data,
+                )
+            ]
 
     snapshot = asyncio.run(LiveProvider(Monitor(), expected_gpu_count=1).get_snapshot())
     server = snapshot["servers"][0]

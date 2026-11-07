@@ -390,13 +390,18 @@ def _failed_result(
     device: sampling.GpuDevice, sampled_at: datetime, attempt: str, code: str
 ) -> dict:
     snapshot = ServerResourceSnapshot(
-        server_id="gpu01", sampled_at=sampled_at, healthy=False,
-        error="device is unavailable", gpus=[],
+        server_id="gpu01",
+        sampled_at=sampled_at,
+        healthy=False,
+        error="device is unavailable",
+        gpus=[],
     )
     return {
         "attempt_id": attempt,
         "device": {
-            "index": device.index, "uuid": device.uuid, "pci_bus": device.pci_bus,
+            "index": device.index,
+            "uuid": device.uuid,
+            "pci_bus": device.pci_bus,
         },
         "snapshot": snapshot.model_dump(mode="json"),
         "data": None,
@@ -506,13 +511,12 @@ def test_legacy_quarantine_file_does_not_block_sampling(
     )
     sampler.tick()
 
-    assert {argv[argv.index("--uuid") + 1] for argv in calls} == {
-        device.uuid for device in devices
-    }
+    assert {argv[argv.index("--uuid") + 1] for argv in calls} == {device.uuid for device in devices}
     cache = json.loads(sampler.cache_path.read_text())
     assert cache["snapshot"]["healthy"] is True
     assert [gpu["error_code"] for gpu in cache["data"]["gpus"]] == [
-        "gpu_sample_pending", "gpu_sample_pending"
+        "gpu_sample_pending",
+        "gpu_sample_pending",
     ]
 
 
@@ -558,14 +562,22 @@ def test_device_error_recovers_without_blocking_sibling_or_early_lease(
     assert cache["snapshot"]["gpus"][1]["idle"] is True
 
     store = QueueStore(tmp_path / "queue")
-    queued = store.enqueue(JobSpec(
-        id="after-recovery", project="tests", command=["python", "train.py"],
-        working_directory=str(tmp_path),
-        resources={"host": "gpu01", "gpu_count": 1, "gpus": [4]},
-    ), now=NOW)
+    queued = store.enqueue(
+        JobSpec(
+            id="after-recovery",
+            project="tests",
+            command=["python", "train.py"],
+            working_directory=str(tmp_path),
+            resources={"host": "gpu01", "gpu_count": 1, "gpus": [4]},
+        ),
+        now=NOW,
+    )
     probe = CachedGpuProbe(tmp_path, "gpu01", clock=lambda: NOW + timedelta(seconds=monotonic[0]))
     scheduler = Scheduler(
-        store, probe, server_id="gpu01", worker_id="worker-1",
+        store,
+        probe,
+        server_id="gpu01",
+        worker_id="worker-1",
         clock=lambda: NOW + timedelta(seconds=monotonic[0]),
         confirmation_provider=probe,
     )
@@ -589,9 +601,7 @@ def test_device_error_recovers_without_blocking_sibling_or_early_lease(
     assert starts[6] >= 2
 
 
-def test_timed_out_device_never_starts_overlapping_probe(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_timed_out_device_never_starts_overlapping_probe(tmp_path: Path, monkeypatch) -> None:
     devices = [_device(4), _device(6)]
     monotonic = [0.0]
     bad_processes: list[_FakeProcess] = []
@@ -607,15 +617,24 @@ def test_timed_out_device_never_starts_overlapping_probe(
         healthy_starts[0] += 1
         attempt = argv[argv.index("--attempt-id") + 1]
         path = Path(argv[argv.index("--result") + 1])
-        path.write_text(json.dumps(_successful_result(
-            devices[1], NOW + timedelta(seconds=monotonic[0]), attempt,
-        )), encoding="utf-8")
+        path.write_text(
+            json.dumps(
+                _successful_result(
+                    devices[1],
+                    NOW + timedelta(seconds=monotonic[0]),
+                    attempt,
+                )
+            ),
+            encoding="utf-8",
+        )
         return _FakeProcess(0)
 
     monkeypatch.setattr(sampling.subprocess, "Popen", spawn)
     monkeypatch.setattr(sampling, "PARENT_SAMPLE_TIMEOUT_SECONDS", 0.5)
     sampler = AsyncGpuSampler(
-        tmp_path, "gpu01", monotonic_clock=lambda: monotonic[0],
+        tmp_path,
+        "gpu01",
+        monotonic_clock=lambda: monotonic[0],
         clock=lambda: NOW + timedelta(seconds=monotonic[0]),
         device_discovery=lambda: devices,
     )
@@ -623,9 +642,10 @@ def test_timed_out_device_never_starts_overlapping_probe(
     monotonic[0] = 0.6
     sampler.tick()
     assert len(bad_processes) == 1
-    assert json.loads(sampler.cache_path.read_text())["data"]["gpus"][0][
-        "error_code"
-    ] == "gpu_query_timeout"
+    assert (
+        json.loads(sampler.cache_path.read_text())["data"]["gpus"][0]["error_code"]
+        == "gpu_query_timeout"
+    )
 
     monotonic[0] = 20
     sampler.tick()
@@ -643,9 +663,10 @@ def test_timed_out_device_never_starts_overlapping_probe(
     assert len(bad_processes) == 1
     assert state.next_attempt_at == pytest.approx(80.1)
     assert state.timeout_backoff == 120
-    assert json.loads(sampler.cache_path.read_text())["data"]["gpus"][0][
-        "error_code"
-    ] == "gpu_query_timeout"
+    assert (
+        json.loads(sampler.cache_path.read_text())["data"]["gpus"][0]["error_code"]
+        == "gpu_query_timeout"
+    )
     monotonic[0] = 80
     sampler.tick()
     assert len(bad_processes) == 1
@@ -741,9 +762,7 @@ def test_removed_device_child_is_retained_until_reaped(tmp_path: Path, monkeypat
     assert sampler._retired_processes == []
 
 
-def test_result_without_real_per_device_timestamp_is_rejected(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_result_without_real_per_device_timestamp_is_rejected(tmp_path: Path, monkeypatch) -> None:
     device = _device(4)
     process = _FakeProcess()
     monkeypatch.setattr(sampling.subprocess, "Popen", lambda *args, **kwargs: process)
@@ -847,7 +866,9 @@ def test_child_reported_timeout_cools_down_then_success_resets_backoff(
 
     monkeypatch.setattr(sampling.subprocess, "Popen", spawn)
     sampler = AsyncGpuSampler(
-        tmp_path, "gpu01", monotonic_clock=lambda: monotonic[0],
+        tmp_path,
+        "gpu01",
+        monotonic_clock=lambda: monotonic[0],
         clock=lambda: NOW + timedelta(seconds=monotonic[0]),
         device_discovery=lambda: [device],
     )
@@ -879,9 +900,7 @@ def test_child_reported_timeout_cools_down_then_success_resets_backoff(
     assert state.next_attempt_at == pytest.approx(125.3)
 
 
-def test_correlated_timeout_retries_are_spread_across_ticks(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_correlated_timeout_retries_are_spread_across_ticks(tmp_path: Path, monkeypatch) -> None:
     devices = [_device(4), _device(5), _device(6)]
     monotonic = [0.0]
     starts: list[tuple[int, float]] = []
@@ -899,14 +918,14 @@ def test_correlated_timeout_retries_are_spread_across_ticks(
             if index in {4, 5} and first_attempt
             else _successful_result(device, sampled_at, attempt)
         )
-        Path(argv[argv.index("--result") + 1]).write_text(
-            json.dumps(result), encoding="utf-8"
-        )
+        Path(argv[argv.index("--result") + 1]).write_text(json.dumps(result), encoding="utf-8")
         return _FakeProcess(0)
 
     monkeypatch.setattr(sampling.subprocess, "Popen", spawn)
     sampler = AsyncGpuSampler(
-        tmp_path, "gpu01", monotonic_clock=lambda: monotonic[0],
+        tmp_path,
+        "gpu01",
+        monotonic_clock=lambda: monotonic[0],
         clock=lambda: NOW + timedelta(seconds=monotonic[0]),
         device_discovery=lambda: devices,
     )

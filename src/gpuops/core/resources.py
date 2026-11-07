@@ -213,14 +213,16 @@ class ServerResourceSnapshot(StrictModel):
             sampled_at = gpu.sampled_at or self.sampled_at
             age = (now - sampled_at).total_seconds()
             if gpu.error or not 0 <= age <= max_age_seconds:
-                gpu = gpu.model_copy(update={
-                    "idle": False,
-                    "memory_total_mib": None,
-                    "memory_used_mib": None,
-                    "utilization_percent": None,
-                    "process_count": None,
-                    "error": gpu.error or "GPU sample is stale; waiting for a new sample",
-                })
+                gpu = gpu.model_copy(
+                    update={
+                        "idle": False,
+                        "memory_total_mib": None,
+                        "memory_used_mib": None,
+                        "utilization_percent": None,
+                        "process_count": None,
+                        "error": gpu.error or "GPU sample is stale; waiting for a new sample",
+                    }
+                )
             gpus.append(gpu)
         return self.model_copy(update={"gpus": gpus})
 

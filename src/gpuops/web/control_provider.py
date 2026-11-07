@@ -95,10 +95,7 @@ class ControlDashboardProvider:
         """Resolve the same fleet as monitoring for each remote operation."""
         if self._targets is not None:
             return self._targets
-        return tuple(
-            RemoteTarget(target.id, target.ssh_host)
-            for target in config.select_targets()
-        )
+        return tuple(RemoteTarget(target.id, target.ssh_host) for target in config.select_targets())
 
     async def get_snapshot(self) -> JsonObject:
         return await self.snapshot_provider.get_snapshot()

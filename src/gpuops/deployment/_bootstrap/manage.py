@@ -384,9 +384,7 @@ def ensure_rollback_queue_compatible(release_id):
     if completed.returncode != 0:
         details = completed.stdout[-2000:].strip()
         suffix = ": " + details if details else ""
-        raise RuntimeError(
-            "rollback target cannot read persisted GPUOps queue records" + suffix
-        )
+        raise RuntimeError("rollback target cannot read persisted GPUOps queue records" + suffix)
 
 
 def status():
@@ -474,7 +472,8 @@ def deploy():
         raise RuntimeError("deployment id is invalid")
     upload_directory = cache / "uploads" / RELEASE_ID / DEPLOYMENT_ID
     uploads = sorted(
-        candidate for candidate in upload_directory.iterdir()
+        candidate
+        for candidate in upload_directory.iterdir()
         if candidate.is_file() and ARTIFACT_PATTERN.fullmatch(candidate.name)
     )
     if len(uploads) != 1:

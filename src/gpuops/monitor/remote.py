@@ -140,7 +140,9 @@ def read_cache():
 """
 
 
-COLLECTOR_SCRIPT = _CACHE_READER + r"""
+COLLECTOR_SCRIPT = (
+    _CACHE_READER
+    + r"""
 try:
     document, snapshot, data = read_cache()
 except CacheError as exc:
@@ -150,9 +152,12 @@ except CacheError as exc:
 else:
     print(json.dumps(data, separators=(",", ":"), ensure_ascii=False), flush=True)
 """
+)
 
 
-DOCTOR_SCRIPT = _CACHE_READER + r"""
+DOCTOR_SCRIPT = (
+    _CACHE_READER
+    + r"""
 import shutil
 import sys
 
@@ -178,6 +183,7 @@ else:
     result["cache_fresh"] = True
 print(json.dumps(result, separators=(",", ":")), flush=True)
 """
+)
 
 
 _CACHE_DEFAULT = (

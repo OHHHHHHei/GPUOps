@@ -244,9 +244,7 @@ class WorkerRuntime:
                             )
                     except Exception as error:
                         worker_error = self._error_text(error)
-                        tick_error = (
-                            f"{tick_error}; {worker_error}" if tick_error else worker_error
-                        )
+                        tick_error = f"{tick_error}; {worker_error}" if tick_error else worker_error
                     tick_finished_at = self.clock()
                     heartbeat = heartbeat.model_copy(
                         update={

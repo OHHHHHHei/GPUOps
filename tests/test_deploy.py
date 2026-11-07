@@ -225,9 +225,7 @@ def test_invalid_host_is_rejected_before_any_command(host, tmp_path: Path) -> No
 
 
 @pytest.mark.parametrize("server_id", ["", "auto", "-node", "node name", "a" * 97, "node/other"])
-def test_invalid_server_id_is_rejected_before_any_command(
-    server_id: str, tmp_path: Path
-) -> None:
+def test_invalid_server_id_is_rejected_before_any_command(server_id: str, tmp_path: Path) -> None:
     runner = FakeCommandRunner()
     manager = RemoteDeploymentManager(ssh=FakeSSH({}), command_runner=runner)
     with pytest.raises(ValueError, match="server id"):
@@ -388,9 +386,7 @@ def test_rollback_rejects_incompatible_queue_before_worker_or_symlink_changes(
     jobs = tmp_path / ".local/state/gpuops/queue/jobs"
     jobs.mkdir(parents=True)
     (jobs / "new-schema.json").write_text("{}\n", encoding="utf-8")
-    target_python = (
-        tmp_path / ".local/share/gpuops/releases" / target_id / "venv/bin/python"
-    )
+    target_python = tmp_path / ".local/share/gpuops/releases" / target_id / "venv/bin/python"
     target_python.write_text(
         "#!/bin/sh\necho 'gpu_uuids is not permitted' >&2\nexit 2\n",
         encoding="utf-8",
@@ -541,7 +537,8 @@ def test_remote_install_creates_runnable_venv_and_ships_bootstrap_sources(
     assert initial_starts == [(artifact.release_id, "gpu-node-03")]
     identity = tmp_path / ".local/share/gpuops/host.json"
     assert json.loads(identity.read_text(encoding="utf-8")) == {
-        "server_id": "gpu-node-03", "ssh_host": "ssh-gpu"
+        "server_id": "gpu-node-03",
+        "ssh_host": "ssh-gpu",
     }
     assert deployed["status"]["server_id"] == "gpu-node-03"
     release = tmp_path / ".local/share/gpuops/releases" / artifact.release_id
@@ -596,15 +593,14 @@ def test_remote_install_creates_runnable_venv_and_ships_bootstrap_sources(
         "pid": None,
         "server_id": None,
     }
-    namespace["start_worker"] = lambda release_id, server_id: starts.append(
-        (release_id, server_id)
-    )
+    namespace["start_worker"] = lambda release_id, server_id: starts.append((release_id, server_id))
     redeployed = namespace["run_action"]()
 
     assert redeployed["changed"] is False
     assert starts == [(artifact.release_id, "gpu-node-03")]
     assert json.loads(identity.read_text(encoding="utf-8")) == {
-        "server_id": "gpu-node-03", "ssh_host": "ssh-gpu"
+        "server_id": "gpu-node-03",
+        "ssh_host": "ssh-gpu",
     }
     assert namespace["deployment_server_id"]() == "gpu-node-03"
 
@@ -624,7 +620,8 @@ def test_remote_install_creates_runnable_venv_and_ships_bootstrap_sources(
     assert rolled_back["status"]["current_release"] == previous_id
     assert starts == [(previous_id, "gpu-node-03")]
     assert json.loads(identity.read_text(encoding="utf-8")) == {
-        "server_id": "gpu-node-03", "ssh_host": "ssh-gpu"
+        "server_id": "gpu-node-03",
+        "ssh_host": "ssh-gpu",
     }
 
     namespace["ACTION"] = "uninstall"
@@ -708,7 +705,10 @@ def test_deploy_rejects_existing_server_identity_before_worker_changes(
     release_id = "d" * 32
     deployment_id = "e" * 32
     upload = (
-        tmp_path / ".cache/gpuops/uploads" / release_id / deployment_id
+        tmp_path
+        / ".cache/gpuops/uploads"
+        / release_id
+        / deployment_id
         / "gpuops-0.1.0-py3-none-any.whl"
     )
     upload.parent.mkdir(parents=True)

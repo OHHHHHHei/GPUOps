@@ -650,10 +650,12 @@ def _run_worker_command(args: argparse.Namespace) -> int:
 async def _run_remote_command(args: argparse.Namespace, targets: tuple[ServerTarget, ...]) -> int:
     if not targets:
         print_error(
-            error_payload(CommandError(
-                "no_servers_registered",
-                "No servers configured; run gpuops server add SSH_ALIAS first.",
-            )),
+            error_payload(
+                CommandError(
+                    "no_servers_registered",
+                    "No servers configured; run gpuops server add SSH_ALIAS first.",
+                )
+            ),
             as_json=args.as_json,
         )
         return 1

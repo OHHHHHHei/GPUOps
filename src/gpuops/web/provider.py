@@ -94,8 +94,7 @@ class LiveProvider:
             self._cached_results = await self.monitor.collect_all()
             self._cached_results = self._fresh_results()
             self._cached_results = [
-                self._preserve_and_remember_card_data(result)
-                for result in self._cached_results
+                self._preserve_and_remember_card_data(result) for result in self._cached_results
             ]
             self._cached_at = time.monotonic()
             return self._cached_results
@@ -184,7 +183,10 @@ class LiveProvider:
                     result = replace(result, data=data)
             if result.online and not self._sample_is_fresh(result, now):
                 result = replace(
-                    result, online=False, data=None, error_code="telemetry_stale",
+                    result,
+                    online=False,
+                    data=None,
+                    error_code="telemetry_stale",
                     error="The last Worker GPU sample is stale; waiting for a new sample.",
                 )
             results.append(result)
@@ -197,8 +199,7 @@ class LiveProvider:
         data = deepcopy(result.data) if has_card_errors else result.data
         previous = self._last_good_data.get(result.server.id, {})
         previous_gpus = {
-            gpu.get("index"): gpu for gpu in previous.get("gpus", [])
-            if isinstance(gpu, dict)
+            gpu.get("index"): gpu for gpu in previous.get("gpus", []) if isinstance(gpu, dict)
         }
         remembered = deepcopy(previous) if has_card_errors else deepcopy(data)
         remembered["collected_at"] = data.get("collected_at")
@@ -304,7 +305,8 @@ class LiveProvider:
         ]
         health = {
             "status": (
-                "ok" if servers and all(item["status"] == "online" for item in servers)
+                "ok"
+                if servers and all(item["status"] == "online" for item in servers)
                 else "degraded"
             ),
             "mode": "live",
@@ -324,7 +326,8 @@ class LiveProvider:
         connection_failed = failed and (error_code == "connection_failed" or error_code is None)
         failed_gpu_status = "offline" if connection_failed else "unknown"
         raw_gpus = {
-            gpu["index"]: gpu for gpu in data.get("gpus", [])
+            gpu["index"]: gpu
+            for gpu in data.get("gpus", [])
             if isinstance(gpu, dict) and type(gpu.get("index")) is int and gpu["index"] >= 0
         }
         indices = (

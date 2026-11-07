@@ -56,11 +56,7 @@ def _read_candidate(path: Path) -> tuple[int, str, str] | None:
         minor = int(fields["Device Minor"])
     except (KeyError, ValueError):
         return None
-    if (
-        minor < 0
-        or not uuid.startswith("GPU-")
-        or PCI_BUS_PATTERN.fullmatch(pci_bus) is None
-    ):
+    if minor < 0 or not uuid.startswith("GPU-") or PCI_BUS_PATTERN.fullmatch(pci_bus) is None:
         return None
     return minor, uuid, pci_bus
 

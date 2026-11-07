@@ -128,9 +128,7 @@ def test_local_python_collector_does_not_require_ssh(
     process = FakeProcess(stdout=b'{"gpus":[]}\n')
 
     async def run():
-        with patch(
-            "asyncio.create_subprocess_exec", new=AsyncMock(return_value=process)
-        ) as create:
+        with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=process)) as create:
             result = await HostClient(ssh_binary="definitely-unavailable").run_python(
                 target.ssh_host, "print('collector')"
             )
@@ -154,9 +152,7 @@ def test_local_worker_command_uses_installed_binary_and_preserves_stdin(
     payload = b'{"request":"unchanged"}\n'
 
     async def run():
-        with patch(
-            "asyncio.create_subprocess_exec", new=AsyncMock(return_value=process)
-        ) as create:
+        with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=process)) as create:
             result = await HostClient(ssh_binary="must-not-run").run_command(
                 target.ssh_host,
                 ["~/.local/bin/gpuops", "remote", "--server-id", "gpu01"],
@@ -180,9 +176,7 @@ def test_peer_host_still_routes_through_ssh(tmp_path, monkeypatch) -> None:
     process = FakeProcess(stdout=b'{"ok":true}')
 
     async def run():
-        with patch(
-            "asyncio.create_subprocess_exec", new=AsyncMock(return_value=process)
-        ) as create:
+        with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=process)) as create:
             await HostClient(ssh_binary="custom-ssh").run_command(
                 "lab-gpu02", ["~/.local/bin/gpuops", "worker", "status", "--json"]
             )
@@ -275,8 +269,7 @@ def test_unqualified_monitor_commands_only_contact_local_server(
 
         async def doctor_all(self):
             return [
-                ServerResult(target, True, data={"gpustat_ok": True})
-                for target in self.targets
+                ServerResult(target, True, data={"gpustat_ok": True}) for target in self.targets
             ]
 
     class Transport:

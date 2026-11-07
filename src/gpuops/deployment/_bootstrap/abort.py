@@ -10,9 +10,8 @@ from pathlib import Path
 os.umask(0o077)
 release_id = sys.argv[1] if len(sys.argv) > 1 else ""
 deployment_id = sys.argv[2] if len(sys.argv) > 2 else ""
-if (
-    not re.fullmatch(r"(?:[0-9a-f]{32}|[0-9a-f]{64})", release_id)
-    or not re.fullmatch(r"[0-9a-f]{32}", deployment_id)
+if not re.fullmatch(r"(?:[0-9a-f]{32}|[0-9a-f]{64})", release_id) or not re.fullmatch(
+    r"[0-9a-f]{32}", deployment_id
 ):
     raise RuntimeError("deployment metadata is invalid")
 home = Path.home()

@@ -41,8 +41,7 @@ def test_sample_device_uses_only_scoped_queries_and_returns_one_gpu() -> None:
         if "--query-gpu" in command[3]:
             return completed(
                 command,
-                "5, GPU-ABCDE, 00000000:81:00.0, 24576, 318, 0, "
-                "NVIDIA A100, 42, 58.5, 250\n",
+                "5, GPU-ABCDE, 00000000:81:00.0, 24576, 318, 0, NVIDIA A100, 42, 58.5, 250\n",
             )
         return completed(command, "")
 
@@ -304,8 +303,11 @@ def test_cuda_check_uses_remaining_shared_deadline() -> None:
         raise subprocess.TimeoutExpired(command, kwargs["timeout"])
 
     sample = LocalGpuProbe(
-        "gpu01", runner=runner, clock=lambda: NOW,
-        monotonic_clock=lambda: current[0], sample_timeout_seconds=6.0,
+        "gpu01",
+        runner=runner,
+        clock=lambda: NOW,
+        monotonic_clock=lambda: current[0],
+        sample_timeout_seconds=6.0,
         pci_checker=lambda _device: None,
     ).sample_device(DEVICE)
 

@@ -194,9 +194,7 @@ print("installed client and deployed Worker OK (" + gpuops.__version__ + ")")
 def run(command: list[str], *, cwd: Path) -> None:
     result = subprocess.run(command, cwd=cwd, text=True, capture_output=True)
     if result.returncode:
-        raise RuntimeError(
-            f"Command failed: {command!r}\n{result.stdout}\n{result.stderr}"
-        )
+        raise RuntimeError(f"Command failed: {command!r}\n{result.stdout}\n{result.stderr}")
     if result.stdout.strip():
         print(result.stdout.strip())
 
@@ -215,9 +213,11 @@ def main() -> None:
         if wheel is None:
             if not uv:
                 parser.error("building the checkout requires uv; alternatively pass --wheel")
-            run([uv, "build", "--wheel", "--out-dir", str(workspace / "dist"), str(project)],
-                cwd=project)
-            wheel, = (workspace / "dist").glob("*.whl")
+            run(
+                [uv, "build", "--wheel", "--out-dir", str(workspace / "dist"), str(project)],
+                cwd=project,
+            )
+            (wheel,) = (workspace / "dist").glob("*.whl")
         installers = ("pip", "uv") if arguments.installer == "both" else (arguments.installer,)
         for installer in installers:
             if installer == "uv" and not uv:
@@ -233,13 +233,24 @@ def main() -> None:
                 [uv, "pip", "install", "--python", str(python), str(wheel)]
                 if installer == "uv"
                 else [
-                    str(python), "-m", "pip", "install", "--disable-pip-version-check", str(wheel),
+                    str(python),
+                    "-m",
+                    "pip",
+                    "install",
+                    "--disable-pip-version-check",
+                    str(wheel),
                 ]
             )
             run(command, cwd=trial)
             run(
-                [str(python), "-I", "-c", CLIENT_SMOKE, str(trial),
-                 "legacy-pip" if arguments.legacy_pip else ""],
+                [
+                    str(python),
+                    "-I",
+                    "-c",
+                    CLIENT_SMOKE,
+                    str(trial),
+                    "legacy-pip" if arguments.legacy_pip else "",
+                ],
                 cwd=trial,
             )
             print(f"{installer} distribution smoke passed")

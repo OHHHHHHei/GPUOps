@@ -126,9 +126,7 @@ class AsyncGpuSampler:
 
     @property
     def processes(self) -> tuple[subprocess.Popen[bytes], ...]:
-        return tuple(
-            state.process for state in self._devices.values() if state.process is not None
-        )
+        return tuple(state.process for state in self._devices.values() if state.process is not None)
 
     def tick(self) -> None:
         self.state_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -271,13 +269,20 @@ class AsyncGpuSampler:
                 sys.executable,
                 "-m",
                 "gpuops.worker.sampling_child",
-                "--server-id", self.server_id,
-                "--result", str(result_path),
-                "--lock-fd", str(lock_fd),
-                "--attempt-id", attempt_id,
-                "--index", str(state.device.index),
-                "--uuid", state.device.uuid,
-                "--pci-bus", state.device.pci_bus,
+                "--server-id",
+                self.server_id,
+                "--result",
+                str(result_path),
+                "--lock-fd",
+                str(lock_fd),
+                "--attempt-id",
+                attempt_id,
+                "--index",
+                str(state.device.index),
+                "--uuid",
+                state.device.uuid,
+                "--pci-bus",
+                state.device.pci_bus,
             ]
             try:
                 state.process = subprocess.Popen(
@@ -347,8 +352,10 @@ class AsyncGpuSampler:
                 return None
         else:
             if raw.get("error_code") not in {
-                "gpu_query_failed", "gpu_query_timeout",
-                "gpu_device_unavailable", "gpu_cuda_unavailable",
+                "gpu_query_failed",
+                "gpu_query_timeout",
+                "gpu_device_unavailable",
+                "gpu_cuda_unavailable",
             }:
                 return None
             if not isinstance(raw.get("error"), str):
@@ -374,10 +381,15 @@ class AsyncGpuSampler:
                 error=f"GPU discovery failed: {self._inventory_error}",
                 gpus=[],
             )
-            _atomic_write_json(self.cache_path, {
-                "snapshot": snapshot.model_dump(mode="json"), "previous": None,
-                "data": None, "error_code": "gpu_discovery_failed",
-            })
+            _atomic_write_json(
+                self.cache_path,
+                {
+                    "snapshot": snapshot.model_dump(mode="json"),
+                    "previous": None,
+                    "data": None,
+                    "error_code": "gpu_discovery_failed",
+                },
+            )
             return
         gpus: list[GpuResource] = []
         raw_gpus: list[dict[str, Any]] = []
@@ -388,33 +400,42 @@ class AsyncGpuSampler:
                 gpu = sample.gpus[0]
                 gpus.append(gpu)
                 raw_gpu = dict(latest["data"]["gpus"][0])
-                raw_gpu.update({
-                    "sampled_at": gpu.sampled_at.isoformat() if gpu.sampled_at else None,
-                    "error": None, "error_code": None,
-                })
+                raw_gpu.update(
+                    {
+                        "sampled_at": gpu.sampled_at.isoformat() if gpu.sampled_at else None,
+                        "error": None,
+                        "error_code": None,
+                    }
+                )
                 raw_gpus.append(raw_gpu)
                 continue
             error = (
-                str(latest.get("error"))
-                if latest is not None
-                else "GPU sample has not completed"
+                str(latest.get("error")) if latest is not None else "GPU sample has not completed"
             )
-            code = (
-                str(latest.get("error_code"))
-                if latest is not None
-                else "gpu_sample_pending"
+            code = str(latest.get("error_code")) if latest is not None else "gpu_sample_pending"
+            gpus.append(
+                GpuResource(
+                    index=state.device.index,
+                    uuid=state.device.uuid,
+                    idle=False,
+                    sampled_at=self._error_sampled_at(latest),
+                    error=error,
+                )
             )
-            gpus.append(GpuResource(
-                index=state.device.index, uuid=state.device.uuid, idle=False,
-                sampled_at=self._error_sampled_at(latest), error=error,
-            ))
-            raw_gpus.append({
-                "index": state.device.index, "uuid": state.device.uuid,
-                "pci.bus_id": state.device.pci_bus, "memory.total": None,
-                "memory.used": None, "utilization.gpu": None, "processes": None,
-                "sampled_at": latest.get("sampled_at") if latest is not None else None,
-                "error": error, "error_code": code,
-            })
+            raw_gpus.append(
+                {
+                    "index": state.device.index,
+                    "uuid": state.device.uuid,
+                    "pci.bus_id": state.device.pci_bus,
+                    "memory.total": None,
+                    "memory.used": None,
+                    "utilization.gpu": None,
+                    "processes": None,
+                    "sampled_at": latest.get("sampled_at") if latest is not None else None,
+                    "error": error,
+                    "error_code": code,
+                }
+            )
         snapshot = ServerResourceSnapshot(
             server_id=self.server_id, sampled_at=now, healthy=True, error=None, gpus=gpus
         )
@@ -448,10 +469,15 @@ class AsyncGpuSampler:
                 previous = old_snapshot.model_copy(update={"gpus": previous_gpus}).model_dump(
                     mode="json"
                 )
-        _atomic_write_json(self.cache_path, {
-            "snapshot": snapshot.model_dump(mode="json"), "previous": previous,
-            "data": {"gpus": raw_gpus, "collected_at": now.isoformat()}, "error_code": None,
-        })
+        _atomic_write_json(
+            self.cache_path,
+            {
+                "snapshot": snapshot.model_dump(mode="json"),
+                "previous": previous,
+                "data": {"gpus": raw_gpus, "collected_at": now.isoformat()},
+                "error_code": None,
+            },
+        )
 
     def _read_cache(self) -> dict[str, Any] | None:
         return _read_json_object(self.cache_path)
@@ -462,9 +488,7 @@ class AsyncGpuSampler:
 
     def _schedule_timeout(self, state: _DeviceState, now: float) -> None:
         state.next_attempt_at = now + state.timeout_backoff
-        state.timeout_backoff = min(
-            state.timeout_backoff * 2, TIMEOUT_BACKOFF_MAX_SECONDS
-        )
+        state.timeout_backoff = min(state.timeout_backoff * 2, TIMEOUT_BACKOFF_MAX_SECONDS)
 
     @staticmethod
     def _device_key(device: GpuDevice) -> str:
@@ -490,7 +514,9 @@ class AsyncGpuSampler:
             sampled_at = sampled_at.replace(tzinfo=timezone.utc)
         return {
             "device": {"index": device.index, "uuid": device.uuid, "pci_bus": device.pci_bus},
-            "sampled_at": sampled_at.isoformat(), "error": message, "error_code": code,
+            "sampled_at": sampled_at.isoformat(),
+            "error": message,
+            "error_code": code,
         }
 
     @staticmethod
@@ -524,8 +550,7 @@ class CachedGpuProbe:
             snapshot = _validated_current_snapshot(cache, self.server_id)
             if snapshot is not None:
                 age = (
-                    now.astimezone(timezone.utc)
-                    - snapshot.sampled_at.astimezone(timezone.utc)
+                    now.astimezone(timezone.utc) - snapshot.sampled_at.astimezone(timezone.utc)
                 ).total_seconds()
                 if 0 <= age <= FRESH_MAX_AGE_SECONDS:
                     return snapshot.with_fresh_gpus(now, FRESH_MAX_AGE_SECONDS)

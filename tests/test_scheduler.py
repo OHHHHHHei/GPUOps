@@ -191,10 +191,12 @@ def test_card_faults_do_not_block_healthy_card_leases(tmp_path, sibling_change) 
     blocked = store.enqueue(job("bad-card", exact=[3]), now=NOW)
     runnable = store.enqueue(job("healthy-card", exact=[4]), now=NOW)
     first = snapshot(gpu(3), gpu(4)).model_copy(update={"sampled_at": NOW - timedelta(seconds=5)})
-    bad_card = gpu(3).model_copy(update={
-        "error": "query failed" if sibling_change == "error" else None,
-        "uuid": "GPU-replaced" if sibling_change == "replace" else "GPU-3",
-    })
+    bad_card = gpu(3).model_copy(
+        update={
+            "error": "query failed" if sibling_change == "error" else None,
+            "uuid": "GPU-replaced" if sibling_change == "replace" else "GPU-3",
+        }
+    )
     second = snapshot(gpu(4)) if sibling_change == "disappear" else snapshot(bad_card, gpu(4))
 
     decisions = cached_scheduler(store, PairProvider((first, second))).tick()
@@ -210,9 +212,13 @@ def test_publication_cannot_refresh_or_duplicate_card_evidence(tmp_path, latest_
     queued = store.enqueue(job("needs-fresh-card"), now=NOW)
     first = snapshot(gpu(4).model_copy(update={"sampled_at": NOW - timedelta(seconds=5)}))
     first = first.model_copy(update={"sampled_at": NOW - timedelta(seconds=1)})
-    second = snapshot(gpu(4).model_copy(update={
-        "sampled_at": NOW + timedelta(seconds=latest_offset),
-    }))
+    second = snapshot(
+        gpu(4).model_copy(
+            update={
+                "sampled_at": NOW + timedelta(seconds=latest_offset),
+            }
+        )
+    )
 
     assert cached_scheduler(store, PairProvider((first, second))).tick() == []
     assert store.get(queued.run_id).status == JobStatus.QUEUED
@@ -220,13 +226,13 @@ def test_publication_cannot_refresh_or_duplicate_card_evidence(tmp_path, latest_
 
 def test_independent_card_confirmations_survive_fast_publication_and_sibling_use(tmp_path) -> None:
     store = QueueStore(tmp_path)
-    first = snapshot(*[
-        gpu(index).model_copy(update={"sampled_at": NOW - timedelta(seconds=5)})
-        for index in [4, 5]
-    ]).model_copy(update={"sampled_at": NOW - timedelta(seconds=1)})
-    second = snapshot(*[
-        gpu(index).model_copy(update={"sampled_at": NOW}) for index in [4, 5]
-    ])
+    first = snapshot(
+        *[
+            gpu(index).model_copy(update={"sampled_at": NOW - timedelta(seconds=5)})
+            for index in [4, 5]
+        ]
+    ).model_copy(update={"sampled_at": NOW - timedelta(seconds=1)})
+    second = snapshot(*[gpu(index).model_copy(update={"sampled_at": NOW}) for index in [4, 5]])
     candidate = cached_scheduler(store, PairProvider((first, second)))
     first_job = store.enqueue(job("on-four", exact=[4]), now=NOW)
     assert [decision.run_id for decision in candidate.tick()] == [first_job.run_id]
@@ -251,11 +257,14 @@ def test_cached_confirmation_rechecks_schedule_window_before_leasing(tmp_path) -
     queued = store.enqueue(constrained, now=NOW)
     times = iter((NOW, NOW + timedelta(seconds=11)))
 
-    assert cached_scheduler(
-        store,
-        PairProvider(cached_pair()),
-        clock=lambda: next(times),
-    ).tick() == []
+    assert (
+        cached_scheduler(
+            store,
+            PairProvider(cached_pair()),
+            clock=lambda: next(times),
+        ).tick()
+        == []
+    )
     assert store.get(queued.run_id).status == JobStatus.QUEUED
 
 

@@ -3,6 +3,17 @@
 Changes are recorded here by release. See [release validation](docs/VALIDATION.md)
 for tested behavior and limits.
 
+## 0.3.0 — 2026-11-07
+
+- Add optional server-side completion email for succeeded, failed, and cancelled
+  jobs. Configure SMTP once with `gpuops notify`; experiment manifests stay the
+  same. Sending runs outside the scheduling loop and retries from saved progress.
+- Start notifications from first enable, skipping older history; preserve delivery
+  progress across Worker restarts. SMTP acceptance does not guarantee inbox delivery.
+- Include notification setup with the installed Agent guides and test the command
+  from independently installed packages.
+- Include the macOS Worker stopped/recovered desktop alerts added after 0.2.1.
+
 ## 0.2.1 — 2026-10-23
 
 - Fix history table project cells losing table layout on desktop, which shifted

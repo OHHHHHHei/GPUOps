@@ -15,12 +15,12 @@ Windows control machines and non-NVIDIA accelerators are outside this release.
 ## Install
 
 You need Python 3.10+ and OpenSSH (`ssh` and `scp`) on the control machine.
-Install the [v0.2.1 release](https://github.com/OHHHHHHei/GPUOps/releases/tag/v0.2.1)
+Install the [v0.3.0 release](https://github.com/OHHHHHHei/GPUOps/releases/tag/v0.3.0)
 with [uv](https://docs.astral.sh/uv/getting-started/installation/), including the
 optional Web console:
 
 ```bash
-uv tool install 'gpuops[web] @ https://github.com/OHHHHHHei/GPUOps/releases/download/v0.2.1/gpuops-0.2.1-py3-none-any.whl'
+uv tool install 'gpuops[web] @ https://github.com/OHHHHHHei/GPUOps/releases/download/v0.3.0/gpuops-0.3.0-py3-none-any.whl'
 gpuops version --json
 ```
 
@@ -33,7 +33,7 @@ virtual environment:
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install './gpuops-0.2.1-py3-none-any.whl[web]'
+.venv/bin/python -m pip install './gpuops-0.3.0-py3-none-any.whl[web]'
 .venv/bin/gpuops version --json
 ```
 
@@ -180,6 +180,20 @@ For new training code, [structured progress](docs/PROGRESS.md) provides a small
 stdout protocol and an emitter without extra dependencies. Missing, stale, or
 insufficient evidence stays unknown. ETA does not reserve GPUs or control
 scheduling.
+
+## Get email when a job finishes
+
+Configure SMTP once per server to receive email when a managed job succeeds,
+fails, or is cancelled. The Worker sends the email, so your control machine can
+be offline. Existing job manifests need no changes.
+
+```bash
+gpuops notify configure smtp.json --server gpu-server --json
+gpuops notify test --server gpu-server --json
+```
+
+See [Job completion email](docs/NOTIFICATIONS.md) for the SMTP settings and how
+to check status or disable email.
 
 ## Get Worker alerts on macOS
 

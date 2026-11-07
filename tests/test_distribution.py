@@ -19,6 +19,7 @@ def test_bundled_agent_files_resolve_the_skill_references() -> None:
         "docs/AGENT_GUIDE.md",
         "docs/CLI_CONTRACT.md",
         "docs/PROGRESS.md",
+        "docs/NOTIFICATIONS.md",
         "examples/job.example.json",
         "examples/progress.example.py",
     } <= bundled.keys()

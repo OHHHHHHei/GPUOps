@@ -29,6 +29,9 @@ acceptance check. GPUOps is not published to PyPI.
   for waiting or failed work.
 - A loopback Web console with independent refresh of GPU, queue, health, and
   optional log-based progress estimates.
+- Optional server-side email for succeeded, failed, and cancelled jobs, with
+  one-time SMTP configuration and persistent retry progress. The submission
+  interface is unchanged; see [notification setup](NOTIFICATIONS.md).
 
 Queue coordination belongs to one trusted Unix account. Other users' processes
 are observed and avoided, without enforced GPU exclusivity against them.
@@ -37,6 +40,8 @@ locks. ETA remains a planning aid and does not reserve resources.
 
 ## Follow-up Work
 
+- Validate SMTP connectivity and inbox delivery for each deployment after its
+  owner configures the mail service. Local tests use simulated SMTP delivery.
 - Validate the complete CUDA lifecycle on each new physical server using the
   procedure below. Historical checks on another machine do not transfer.
 - Integrate optional structured progress in a controlled training run and compare

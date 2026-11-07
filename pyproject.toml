@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "gpuops"
-version = "0.2.1"
+version = "0.3.0"
 description = "GPU monitoring, job orchestration, and Agent task runtime for research workstations"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -45,6 +45,7 @@ packages = ["src/gpuops"]
 "docs/AGENT_GUIDE.md" = "gpuops/_bundled/agent/docs/AGENT_GUIDE.md"
 "docs/CLI_CONTRACT.md" = "gpuops/_bundled/agent/docs/CLI_CONTRACT.md"
 "docs/PROGRESS.md" = "gpuops/_bundled/agent/docs/PROGRESS.md"
+"docs/NOTIFICATIONS.md" = "gpuops/_bundled/agent/docs/NOTIFICATIONS.md"
 "examples/job.example.json" = "gpuops/_bundled/agent/examples/job.example.json"
 "examples/progress.example.py" = "gpuops/_bundled/agent/examples/progress.example.py"
 

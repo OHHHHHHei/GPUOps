@@ -66,6 +66,7 @@ def job_message(settings: SMTPSettings, server_id: str, record: JobRecord) -> Em
 def send_mail(settings: SMTPSettings, message: EmailMessage) -> None:
     try:
         context = ssl.create_default_context()
+        client: smtplib.SMTP
         if settings.security == "ssl":
             client = smtplib.SMTP_SSL(
                 settings.host, settings.port, timeout=SMTP_TIMEOUT_SECONDS, context=context

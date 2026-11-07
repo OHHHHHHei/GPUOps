@@ -551,6 +551,7 @@ class DurableSupervisorLauncher:
     def poll(self, job: Any) -> int | None:
         result, receipt = self._result_and_receipt(job)
         if result is not None:
+            assert receipt is not None
             if not self.supervisor.process_groups_gone(receipt):
                 return None
             self.supervisor.release_log_reservation(job.run_id)

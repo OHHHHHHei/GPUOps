@@ -501,7 +501,8 @@ class LocalGpuProbe:
             process.setdefault(field, None)
         process.setdefault("username", None)
         try:
-            pid = int(process.get("pid"))
+            raw_pid: Any = process.get("pid")
+            pid = int(raw_pid)
             parts = [
                 part
                 for part in (proc_root / str(pid) / "cmdline").read_bytes().split(b"\0")

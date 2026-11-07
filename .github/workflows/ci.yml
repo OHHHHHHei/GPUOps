@@ -27,6 +27,8 @@ jobs:
           enable-cache: true
       - run: uv sync --all-extras --frozen
       - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy src/
       - run: uv run pytest
       - run: node --test tests/test_web_polling.cjs
 

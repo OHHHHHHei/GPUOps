@@ -94,6 +94,7 @@ async def collect_history(
     # Paging through an incomplete fleet could skip records when a host returns.
     if len(entries) > limit and all(host.error is None for host in hosts):
         target, job = items[-1]
+        assert job.finished_at is not None
         next_cursor = encode_cursor((job.finished_at, job.run_id, target.server_id))
     return HistoryPage(
         items=items,

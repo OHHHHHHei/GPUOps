@@ -19,7 +19,9 @@ _AGENT_FILES = {
 
 
 def _read(group: str, name: str, source_path: str) -> str:
-    resource = files("gpuops").joinpath("_bundled", group, *name.split("/"))
+    resource = files("gpuops")
+    for part in ("_bundled", group, *name.split("/")):
+        resource = resource.joinpath(part)
     if resource.is_file():
         return resource.read_text(encoding="utf-8")
     # Editable installs read the same source files that hatch includes in wheels.

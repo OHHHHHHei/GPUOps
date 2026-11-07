@@ -49,7 +49,7 @@ def format_status_table(results: Iterable[ServerResult]) -> str:
 
 def format_doctor_table(results: Iterable[ServerResult]) -> str:
     headers = ("SERVER", "SSH", "PYTHON", "GPU SAMPLE", "DETAIL")
-    rows = []
+    rows: list[tuple[str, ...]] = []
     for result in results:
         data = result.data or {}
         rows.append(
@@ -79,7 +79,7 @@ def _gpu_rows(server: str, gpu: dict[str, Any]) -> list[tuple[str, ...]]:
     )
     if not processes:
         return [common + ("-", "-", "-", "-", "-")]
-    rows = []
+    rows: list[tuple[str, ...]] = []
     for position, process in enumerate(processes):
         prefix = common if position == 0 else ("", "", "", "", "")
         rows.append(

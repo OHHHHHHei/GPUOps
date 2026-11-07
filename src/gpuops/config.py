@@ -23,7 +23,7 @@ class ServerTarget:
     ssh_host: str
 
 
-def validate_server_id(server_id: str) -> None:
+def validate_server_id(server_id: object) -> None:
     if (
         not isinstance(server_id, str)
         or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,95}", server_id)
@@ -43,6 +43,7 @@ def _target_from_record(value: object) -> ServerTarget:
         raise ValueError("server entry must be an object")
     server_id = value.get("id")
     validate_server_id(server_id)
+    assert isinstance(server_id, str)
     ssh_host = value.get("ssh_host")
     label = value.get("label", server_id)
     if not isinstance(ssh_host, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.@-]*", ssh_host):

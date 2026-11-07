@@ -209,7 +209,8 @@ class SshWorkerTransport:
 
     @staticmethod
     def _require_ready_worker(health: dict[str, Any]) -> None:
-        worker = health.get("worker") if isinstance(health.get("worker"), dict) else {}
+        worker_data = health.get("worker")
+        worker = worker_data if isinstance(worker_data, dict) else {}
         if (
             health.get("status") != "ok"
             or health.get("durable") is not True
@@ -267,7 +268,8 @@ class SshWorkerTransport:
         if response.get("request_id") != request["request_id"]:
             raise RemoteWorkerError("protocol_error", "worker response request_id mismatch")
         if response.get("ok") is not True:
-            error = response.get("error") if isinstance(response.get("error"), dict) else {}
+            error_data = response.get("error")
+            error = error_data if isinstance(error_data, dict) else {}
             raise RemoteWorkerError(
                 str(error.get("code") or "remote_error"),
                 str(error.get("message") or "remote worker rejected the request"),

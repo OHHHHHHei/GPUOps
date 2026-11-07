@@ -253,6 +253,29 @@ def test_incremental_transition_enters_history_without_rebuild(tmp_path, monkeyp
     assert store.history(server_id="gpu01") == [JobSummary.from_record(cancelled)]
 
 
+def test_terminal_after_uses_index_and_resumes_with_timestamp_ties(tmp_path, monkeypatch) -> None:
+    store = QueueStore(tmp_path)
+    cancel(store, "old", finished_at=NOW - timedelta(seconds=1))
+    cancel(store, "b", finished_at=NOW + timedelta(seconds=1))
+    cancel(store, "a", finished_at=NOW + timedelta(seconds=1))
+    cancel(store, "new", finished_at=NOW + timedelta(seconds=2))
+    store.enqueue(spec("active"), now=NOW, run_id="active")
+    store.summaries()
+
+    def fail_full_scan() -> list[JobRecord]:
+        raise AssertionError("notification query scanned authoritative job JSON")
+
+    monkeypatch.setattr(store, "_all_unlocked", fail_full_scan)
+    page = store.terminal_after((NOW, ""), limit=1)
+    assert [row.run_id for row in page] == ["a"]
+    assert page[0].finished_at is not None
+    cursor = (page[0].finished_at, page[0].run_id)
+    assert [row.run_id for row in store.terminal_after(cursor)] == ["b", "new"]
+    assert store.terminal_after((NOW + timedelta(seconds=2), "new")) == []
+    with pytest.raises(ValueError, match="positive"):
+        store.terminal_after(cursor, limit=0)
+
+
 def test_idempotent_enqueue_does_not_duplicate_index_row(tmp_path) -> None:
     store = QueueStore(tmp_path)
     first = store.enqueue(spec("retry"), now=NOW, run_id="same-run")

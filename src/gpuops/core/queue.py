@@ -387,6 +387,15 @@ class QueueStore:
         with self._lock():
             return self.index.history_projects(self._all_unlocked)
 
+    def terminal_after(
+        self,
+        after: tuple[datetime, str],
+        *,
+        limit: int = 50,
+    ) -> list[JobSummary]:
+        with self._lock():
+            return self.index.terminal_after(self._all_unlocked, after, limit=limit)
+
     def events(self) -> list[QueueEvent]:
         with self._lock():
             lines: list[str] = []

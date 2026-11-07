@@ -35,6 +35,7 @@ if not shutil.which('nvidia-smi') or not pathlib.Path('/proc/driver/nvidia/gpus'
     raise SystemExit('NVIDIA driver and nvidia-smi must already be installed')
 """
 
+
 async def add_server(ssh_alias: str, *, project_root: Path | None = None) -> dict[str, Any]:
     validate_server_id(ssh_alias)
     ssh = SSHClient()

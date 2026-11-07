@@ -56,14 +56,21 @@ def test_slow_sample_does_not_block_control_or_grant_resources(tmp_path, monkeyp
 
     rpc = WorkerRpc(state, server_id="gpu01", queue=queue, readiness_probe=readiness)
     spec = JobSpec(
-        id="control-canary", project="test", command=["must-not-run"],
-        working_directory=str(tmp_path), resources={"host": "gpu01", "gpu_count": 1},
+        id="control-canary",
+        project="test",
+        command=["must-not-run"],
+        working_directory=str(tmp_path),
+        resources={"host": "gpu01", "gpu_count": 1},
     )
     for run_id, gpu in (("completed", 0), ("cancel-running", 1)):
         record = queue.enqueue(spec, run_id=run_id)
         queue.lease(
-            run_id, server_id="gpu01", gpu_indices=[gpu], worker_id="test-worker",
-            ttl=timedelta(minutes=1), expected_revision=record.revision,
+            run_id,
+            server_id="gpu01",
+            gpu_indices=[gpu],
+            worker_id="test-worker",
+            ttl=timedelta(minutes=1),
+            expected_revision=record.revision,
         )
         queue.transition(run_id, JobStatus.STARTING)
         queue.transition(
@@ -83,8 +90,9 @@ def test_slow_sample_does_not_block_control_or_grant_resources(tmp_path, monkeyp
 
     worker = Worker(
         queue,
-        Scheduler(queue, probe, server_id="gpu01", worker_id="test-worker",
-                  confirmation_provider=probe),
+        Scheduler(
+            queue, probe, server_id="gpu01", worker_id="test-worker", confirmation_provider=probe
+        ),
         Launcher(),
     )
     heartbeats = []
@@ -107,8 +115,12 @@ def test_slow_sample_does_not_block_control_or_grant_resources(tmp_path, monkeyp
         time.sleep(0.03)
 
     runtime = WorkerRuntime(
-        server_id="gpu01", worker_id="test-worker", paths=paths, tick=worker.tick,
-        identity_reader=lambda pid: identity, sampler_factory=lambda: sampler,
+        server_id="gpu01",
+        worker_id="test-worker",
+        paths=paths,
+        tick=worker.tick,
+        identity_reader=lambda pid: identity,
+        sampler_factory=lambda: sampler,
         sleeper=between_ticks,
     )
     try:

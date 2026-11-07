@@ -353,6 +353,9 @@ class WorkerRpc:
         content = b"".join(reversed(chunks))
         if not content and total_bytes:
             raise LogNotFound(f"console logs for {run_id!r} changed while being read")
+        sampled_at = time.time()
+        utc_offset = datetime.now().astimezone().utcoffset()
+        assert utc_offset is not None
         return {
             "run_id": run_id,
             "content": content.decode("utf-8", errors="replace"),
@@ -361,8 +364,8 @@ class WorkerRpc:
             "files": list(reversed(selected_names)),
             "source": str(run_directory / selected_names[0]) if selected_names else None,
             "modified_at": modified_at,
-            "sampled_at": time.time(),
-            "utc_offset_seconds": datetime.now().astimezone().utcoffset().total_seconds(),
+            "sampled_at": sampled_at,
+            "utc_offset_seconds": utc_offset.total_seconds(),
         }
 
     def health(self, params: Mapping[str, Any]) -> dict[str, Any]:

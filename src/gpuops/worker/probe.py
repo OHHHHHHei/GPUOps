@@ -57,9 +57,7 @@ class CudaUnavailable(ProbeCommandError):
     """An idle GPU cannot be initialized through CUDA."""
 
 
-def check_pci_config(
-    device: GpuDevice, sysfs_root: Path = Path("/sys/bus/pci/devices")
-) -> None:
+def check_pci_config(device: GpuDevice, sysfs_root: Path = Path("/sys/bus/pci/devices")) -> None:
     """Read only the target device's PCI identity before touching NVIDIA's driver."""
 
     try:
@@ -503,7 +501,8 @@ class LocalGpuProbe:
             process.setdefault(field, None)
         process.setdefault("username", None)
         try:
-            pid = int(process.get("pid"))
+            raw_pid: Any = process.get("pid")
+            pid = int(raw_pid)
             parts = [
                 part
                 for part in (proc_root / str(pid) / "cmdline").read_bytes().split(b"\0")

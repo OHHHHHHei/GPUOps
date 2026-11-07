@@ -10,6 +10,8 @@ servers, controlled from a POSIX machine. See [README](README.md) for setup and
 uv sync --all-extras
 uv run pytest
 uv run ruff check .
+uv run ruff format --check .
+uv run mypy src/
 node --test tests/test_web_polling.cjs
 uv build --wheel
 ```
@@ -17,6 +19,14 @@ uv build --wheel
 Use Python 3.10+ and Node.js 22+ for the browser polling tests. Linux supervisor
 tests exercise actual process behavior with synthetic GPU observations. A local
 test pass does not establish live SSH, driver, or CUDA readiness.
+
+Type checking covers `src/` with mypy's default settings; strict mode is not
+enabled. Run `uv run ruff format .` to format Python files. To omit the bulk
+formatting commit from local blame output, configure this checkout once:
+
+```bash
+git config blame.ignoreRevsFile .git-blame-ignore-revs
+```
 
 Keep changes focused, explain the behavior they change, and include the checks
 you ran. Add tests for meaningful behavior changes. UI changes should include a

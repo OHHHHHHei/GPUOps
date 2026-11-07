@@ -9,7 +9,7 @@ import sys
 from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from pydantic import ValidationError
 
@@ -23,7 +23,7 @@ from gpuops.monitor.formatting import format_doctor_table, format_status_table
 
 
 class _ArgumentParser(argparse.ArgumentParser):
-    def error(self, message: str) -> None:
+    def error(self, message: str) -> NoReturn:
         raise CommandError("invalid_argument", message)
 
 
@@ -306,8 +306,8 @@ async def _run_deploy_command(args: argparse.Namespace) -> int:
                 result = await manager.deploy(host, args.project_root, server_id=by_host.get(host))
                 return {"host": host, "ok": True, "result": asdict(result)}
             if args.deploy_command == "status":
-                result = await manager.status(host)
-                return {"host": host, "ok": True, "result": asdict(result)}
+                deployment_status = await manager.status(host)
+                return {"host": host, "ok": True, "result": asdict(deployment_status)}
             if args.deploy_command == "rollback":
                 result = await manager.rollback(host)
                 return {"host": host, "ok": True, "result": asdict(result)}
@@ -372,6 +372,7 @@ async def _run_control_command(args: argparse.Namespace) -> int:
     outcome = "success"
     run_id = getattr(args, "run_id", None)
     submission_started = False
+    payload: dict[str, Any]
 
     try:
         if args.command in {"submit", "reconcile"}:
@@ -617,7 +618,10 @@ def _run_worker_command(args: argparse.Namespace) -> int:
 
     state_directory = args.state_dir or DEFAULT_STATE_DIRECTORY
     if getattr(args, "interval", 1) <= 0:
-        print("gpuops: --interval must be positive", file=sys.stderr)
+        print_error(
+            error_payload(CommandError("invalid_argument", "--interval must be positive")),
+            as_json=args.as_json,
+        )
         return 2
     try:
         if args.worker_command == "run":
@@ -647,10 +651,12 @@ def _run_worker_command(args: argparse.Namespace) -> int:
 async def _run_remote_command(args: argparse.Namespace, targets: tuple[ServerTarget, ...]) -> int:
     if not targets:
         print_error(
-            error_payload(CommandError(
-                "no_servers_registered",
-                "No servers configured; run gpuops server add SSH_ALIAS first.",
-            )),
+            error_payload(
+                CommandError(
+                    "no_servers_registered",
+                    "No servers configured; run gpuops server add SSH_ALIAS first.",
+                )
+            ),
             as_json=args.as_json,
         )
         return 1

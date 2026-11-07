@@ -126,9 +126,9 @@ def process_group_state(identity: ProcessIdentity, proc_root: str | Path) -> str
     if identity.start_ticks is None or not identity.boot_id:
         return "unknown"
     try:
-        current_boot_id = root.joinpath("sys/kernel/random/boot_id").read_text(
-            encoding="utf-8"
-        ).strip()
+        current_boot_id = (
+            root.joinpath("sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
+        )
     except OSError:
         return "unknown"
     if current_boot_id != identity.boot_id:

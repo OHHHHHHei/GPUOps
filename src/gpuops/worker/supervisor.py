@@ -78,11 +78,7 @@ class DurableJobSupervisor:
         proc_root: str | Path = "/proc",
         clock: Callable[[], datetime] | None = None,
     ) -> None:
-        if (
-            receipt_timeout_seconds < 0
-            or poll_interval_seconds <= 0
-            or cancel_grace_seconds < 0
-        ):
+        if receipt_timeout_seconds < 0 or poll_interval_seconds <= 0 or cancel_grace_seconds < 0:
             raise ValueError("supervisor timeouts must be non-negative and polling positive")
         self.root = Path(root)
         self.storage = storage
@@ -555,6 +551,7 @@ class DurableSupervisorLauncher:
     def poll(self, job: Any) -> int | None:
         result, receipt = self._result_and_receipt(job)
         if result is not None:
+            assert receipt is not None
             if not self.supervisor.process_groups_gone(receipt):
                 return None
             self.supervisor.release_log_reservation(job.run_id)
@@ -617,7 +614,6 @@ class DurableSupervisorLauncher:
             started_at=datetime.fromisoformat(started_at),
             external_id=receipt.launch_token,
         )
-
 
 
 def _build_internal_parser() -> argparse.ArgumentParser:

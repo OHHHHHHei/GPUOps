@@ -47,9 +47,7 @@ def test_usage_ignores_temporary_file_removed_after_enumeration(
                 temporary.unlink()
         return paths
 
-    monkeypatch.setattr(
-        StorageBudget, "_regular_files", staticmethod(enumerate_then_finish_write)
-    )
+    monkeypatch.setattr(StorageBudget, "_regular_files", staticmethod(enumerate_then_finish_write))
 
     usage = storage.usage()
 

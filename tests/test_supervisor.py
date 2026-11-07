@@ -48,9 +48,9 @@ def write_fake_proc(
     boot_path = proc_root / "sys/kernel/random"
     boot_path.mkdir(parents=True, exist_ok=True)
     boot_path.joinpath("boot_id").write_text(f"{identity.boot_id}\n", encoding="utf-8")
-    tail = [state, "1", str(identity.pgid), "0"] + ["0"] * 15 + [
-        str(identity.start_ticks)
-    ] + ["0"] * 4
+    tail = (
+        [state, "1", str(identity.pgid), "0"] + ["0"] * 15 + [str(identity.start_ticks)] + ["0"] * 4
+    )
     process_directory.joinpath("stat").write_text(
         f"{identity.pid} (gpuops supervisor) " + " ".join(tail),
         encoding="utf-8",
@@ -97,9 +97,7 @@ def write_supervisor_artifacts(
                 if child is not None
                 else None
             ),
-            "child_started_at": (
-                "2026-09-19T00:00:01+00:00" if child is not None else None
-            ),
+            "child_started_at": ("2026-09-19T00:00:01+00:00" if child is not None else None),
         },
     )
 
@@ -130,21 +128,37 @@ def test_launch_writes_receipt_result_and_merged_console(tmp_path: Path) -> None
     assert json.loads(paths.result.read_text())["exit_code"] == 0
 
 
-@pytest.mark.parametrize("identities,expected", [
-    ({4: "GPU-four", 5: "GPU-five"}, "GPU-four,GPU-five"), ({}, "4,5"),
-])
+@pytest.mark.parametrize(
+    "identities,expected",
+    [
+        ({4: "GPU-four", 5: "GPU-five"}, "GPU-four,GPU-five"),
+        ({}, "4,5"),
+    ],
+)
 def test_launcher_binds_confirmed_physical_gpus_and_reads_legacy_leases(
-    tmp_path: Path, identities: dict[int, str], expected: str,
+    tmp_path: Path,
+    identities: dict[int, str],
+    expected: str,
 ) -> None:
     store = QueueStore(tmp_path / "queue")
-    record = store.enqueue(JobSpec(
-        id="cuda-binding", project="tests", working_directory=str(tmp_path),
-        command=[sys.executable, "-c", "import os; print(os.environ['CUDA_VISIBLE_DEVICES'])"],
-        resources={"gpu_count": 2}, runtime={"environment": {"CUDA_VISIBLE_DEVICES": "0,1"}},
-    ))
+    record = store.enqueue(
+        JobSpec(
+            id="cuda-binding",
+            project="tests",
+            working_directory=str(tmp_path),
+            command=[sys.executable, "-c", "import os; print(os.environ['CUDA_VISIBLE_DEVICES'])"],
+            resources={"gpu_count": 2},
+            runtime={"environment": {"CUDA_VISIBLE_DEVICES": "0,1"}},
+        )
+    )
     record = store.lease(
-        record.run_id, server_id="gpu01", gpu_indices=[5, 4], gpu_uuids=identities,
-        worker_id="worker", ttl=timedelta(seconds=30), expected_revision=0,
+        record.run_id,
+        server_id="gpu01",
+        gpu_indices=[5, 4],
+        gpu_uuids=identities,
+        worker_id="worker",
+        ttl=timedelta(seconds=30),
+        expected_revision=0,
     )
     supervisor = DurableJobSupervisor(tmp_path / "supervisor")
     DurableSupervisorLauncher(supervisor).start(record)
@@ -163,8 +177,8 @@ def test_flushed_console_output_is_visible_before_child_exit(tmp_path: Path) -> 
         f"Path({str(ready)!r}).write_text('ready'); "
         f"release=Path({str(release)!r}); "
         "deadline=time.monotonic()+5; "
-        "exec(\"while not release.exists() and time.monotonic() < deadline:\\n"
-        "    time.sleep(0.01)\")"
+        'exec("while not release.exists() and time.monotonic() < deadline:\\n'
+        '    time.sleep(0.01)")'
     )
     supervisor = DurableJobSupervisor(tmp_path)
     supervisor.launch("streaming-run", [sys.executable, "-c", code], cwd=tmp_path)
@@ -757,9 +771,7 @@ def test_cancel_with_intent_but_no_receipt_stays_pending(tmp_path: Path) -> None
         },
     )
 
-    assert supervisor.request_cancel(
-        "launching", expected_launch_token="pending-token"
-    ) is False
+    assert supervisor.request_cancel("launching", expected_launch_token="pending-token") is False
 
 
 def test_cancel_is_complete_once_matching_durable_result_exists(tmp_path: Path) -> None:
@@ -790,9 +802,7 @@ def test_cancel_is_complete_once_matching_durable_result_exists(tmp_path: Path) 
         },
     )
 
-    assert supervisor.request_cancel(
-        "finished", expected_launch_token="finished-token"
-    ) is True
+    assert supervisor.request_cancel("finished", expected_launch_token="finished-token") is True
 
 
 def test_result_with_surviving_child_group_stays_active_and_is_escalated(
@@ -881,9 +891,7 @@ def test_cancel_signals_only_validated_supervisor_identity(
     monkeypatch.setattr(os, "killpg", lambda pgid, sig: calls.append((pgid, sig)))
     supervisor = DurableJobSupervisor(tmp_path / "runs", proc_root=proc)
 
-    assert supervisor.request_cancel(
-        "managed", expected_launch_token="launch-token"
-    ) is False
+    assert supervisor.request_cancel("managed", expected_launch_token="launch-token") is False
     assert calls == [(identity.pgid, signal.SIGTERM)]
 
 

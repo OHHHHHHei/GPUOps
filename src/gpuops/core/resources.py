@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from math import isfinite
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol, overload
 
 from pydantic import Field, field_validator, model_validator
 
@@ -53,6 +53,9 @@ class ResourceEligibilityPolicy:
     def classify(self, telemetry: GpuTelemetry) -> GpuEligibility:
         if not _valid_telemetry(telemetry):
             return GpuEligibility.UNKNOWN
+        assert telemetry.process_count is not None
+        assert telemetry.utilization_percent is not None
+        assert telemetry.memory_used_mib is not None
         if telemetry.process_count > 0:
             return GpuEligibility.BUSY
         if telemetry.utilization_percent > self.idle_utilization_threshold:
@@ -84,6 +87,33 @@ def telemetry_from_mapping(value: Mapping[str, Any]) -> GpuTelemetry:
         utilization_percent=float(utilization) if utilization is not None else None,
         memory_used_mib=normalize_nonnegative_number(value.get("memory.used"), integral=True),
     )
+
+
+@overload
+def normalize_nonnegative_number(
+    value: Any,
+    *,
+    integral: Literal[True],
+    maximum: float | None = None,
+) -> int | None: ...
+
+
+@overload
+def normalize_nonnegative_number(
+    value: Any,
+    *,
+    integral: Literal[False] = False,
+    maximum: float | None = None,
+) -> float | None: ...
+
+
+@overload
+def normalize_nonnegative_number(
+    value: Any,
+    *,
+    integral: bool,
+    maximum: float | None = None,
+) -> int | float | None: ...
 
 
 def normalize_nonnegative_number(
@@ -213,14 +243,16 @@ class ServerResourceSnapshot(StrictModel):
             sampled_at = gpu.sampled_at or self.sampled_at
             age = (now - sampled_at).total_seconds()
             if gpu.error or not 0 <= age <= max_age_seconds:
-                gpu = gpu.model_copy(update={
-                    "idle": False,
-                    "memory_total_mib": None,
-                    "memory_used_mib": None,
-                    "utilization_percent": None,
-                    "process_count": None,
-                    "error": gpu.error or "GPU sample is stale; waiting for a new sample",
-                })
+                gpu = gpu.model_copy(
+                    update={
+                        "idle": False,
+                        "memory_total_mib": None,
+                        "memory_used_mib": None,
+                        "utilization_percent": None,
+                        "process_count": None,
+                        "error": gpu.error or "GPU sample is stale; waiting for a new sample",
+                    }
+                )
             gpus.append(gpu)
         return self.model_copy(update={"gpus": gpus})
 

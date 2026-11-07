@@ -17,7 +17,7 @@ from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from types import FrameType
-from typing import Any, Protocol
+from typing import Any, BinaryIO, Protocol
 
 from gpuops.models import StrictModel, utc_now
 from gpuops.worker.process_identity import parse_proc_start_ticks, read_procfs_record
@@ -88,8 +88,26 @@ class WorkerProcessStatus:
     heartbeat: dict[str, Any] | None
 
 
+class _SpawnedProcess(Protocol):
+    @property
+    def pid(self) -> int: ...
+
+
 class ProcessFactory(Protocol):
-    def __call__(self, args: Sequence[str], **kwargs: Any) -> Any: ...
+    def __call__(
+        self,
+        args: Sequence[str],
+        /,
+        *,
+        stdin: int,
+        stdout: BinaryIO,
+        stderr: BinaryIO | int,
+        cwd: str | None,
+        env: Mapping[str, str] | None,
+        start_new_session: bool,
+        close_fds: bool,
+        shell: bool,
+    ) -> _SpawnedProcess: ...
 
 
 class RuntimeSampler(Protocol):
@@ -244,9 +262,7 @@ class WorkerRuntime:
                             )
                     except Exception as error:
                         worker_error = self._error_text(error)
-                        tick_error = (
-                            f"{tick_error}; {worker_error}" if tick_error else worker_error
-                        )
+                        tick_error = f"{tick_error}; {worker_error}" if tick_error else worker_error
                     tick_finished_at = self.clock()
                     heartbeat = heartbeat.model_copy(
                         update={

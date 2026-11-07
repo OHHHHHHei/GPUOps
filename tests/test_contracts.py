@@ -109,9 +109,10 @@ def test_unknown_telemetry_stays_visible_and_fails_closed() -> None:
     gpu = snapshot.gpus[0]
     dashboard_gpu = LiveProvider._gpu_snapshot(0, raw, None)
 
-    assert DEFAULT_RESOURCE_ELIGIBILITY_POLICY.classify(
-        telemetry_from_mapping(raw)
-    ) is GpuEligibility.UNKNOWN
+    assert (
+        DEFAULT_RESOURCE_ELIGIBILITY_POLICY.classify(telemetry_from_mapping(raw))
+        is GpuEligibility.UNKNOWN
+    )
     assert gpu.utilization_percent is None
     assert gpu.idle is False
     assert gpu.can_allocate(0) is False

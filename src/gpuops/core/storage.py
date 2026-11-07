@@ -296,9 +296,7 @@ class StorageBudget:
         files: list[Path] = []
         for root, directories, names in os.walk(directory, followlinks=False):
             root_path = Path(root)
-            directories[:] = [
-                name for name in directories if not (root_path / name).is_symlink()
-            ]
+            directories[:] = [name for name in directories if not (root_path / name).is_symlink()]
             for name in names:
                 path = root_path / name
                 if path.is_symlink():
@@ -322,9 +320,10 @@ class StorageBudget:
         if relative.is_absolute() or not relative.parts or ".." in relative.parts:
             raise ValueError("log path must be a relative path within the GPUOps log directory")
         target = self._resolved(self.logs_directory / relative)
-        if target == self._resolved(self.logs_directory) or self._resolved(
-            self.logs_directory
-        ) not in target.parents:
+        if (
+            target == self._resolved(self.logs_directory)
+            or self._resolved(self.logs_directory) not in target.parents
+        ):
             raise ValueError("log path escapes the GPUOps log directory")
         return target
 

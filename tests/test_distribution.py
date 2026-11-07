@@ -34,10 +34,16 @@ def test_source_archive_restores_build_sources_without_installed_caches(tmp_path
     with tarfile.open(artifact.path) as archive:
         names = {item.name.removeprefix(f"gpuops-{__version__}/") for item in archive}
         assert {
-            "pyproject.toml", "README.md", "LICENSE", "src/gpuops/worker/runtime.py",
-            "src/gpuops/deployment/_bootstrap/manage.py", "src/gpuops/bundled.py",
-            "src/gpuops/web/static/app.js", "skills/gpu-infra/SKILL.md",
-            "docs/CLI_CONTRACT.md", "examples/progress.example.py",
+            "pyproject.toml",
+            "README.md",
+            "LICENSE",
+            "src/gpuops/worker/runtime.py",
+            "src/gpuops/deployment/_bootstrap/manage.py",
+            "src/gpuops/bundled.py",
+            "src/gpuops/web/static/app.js",
+            "skills/gpu-infra/SKILL.md",
+            "docs/CLI_CONTRACT.md",
+            "examples/progress.example.py",
         } <= names
         assert not any("__pycache__" in name or "/_bundled/" in name for name in names)
         assert all(item.isfile() for item in archive.getmembers())

@@ -378,7 +378,7 @@ def test_foreground_loop_ticks_and_closes_sampler_inside_worker_lock(tmp_path: P
         sleeper=lambda _: None,
         getpid=lambda: identity.pid,
         identity_reader=lambda pid: identity if pid == identity.pid else None,
-        sampler_factory=lambda: (events.append("create") or Sampler()),
+        sampler_factory=lambda: events.append("create") or Sampler(),
     )
 
     assert runtime.run_foreground(max_iterations=2, install_signal_handlers=False) == 2
@@ -444,7 +444,8 @@ def test_sampler_tick_failure_does_not_skip_worker_tick(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("fail_at", [None, "create", "start", "close"])
 def test_notifications_share_worker_lifetime_without_affecting_health(
-    tmp_path: Path, fail_at: str | None,
+    tmp_path: Path,
+    fail_at: str | None,
 ) -> None:
     paths = RuntimePaths.from_state_directory(tmp_path / "state")
     identity = ProcessIdentity(pid=4321, start_time_ticks=9876, boot_id="boot-a")
@@ -482,7 +483,8 @@ def test_notifications_share_worker_lifetime_without_affecting_health(
     )
     assert runtime.run_foreground(max_iterations=2, install_signal_handlers=False) == 2
     assert events == (
-        ["create", "tick", "tick"] if fail_at == "create"
+        ["create", "tick", "tick"]
+        if fail_at == "create"
         else ["create", "start", "tick", "tick", "close"]
     )
     health = json.loads(paths.heartbeat_path.read_text())

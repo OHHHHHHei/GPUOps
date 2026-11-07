@@ -97,10 +97,12 @@ def test_running_web_uses_current_targets_for_monitor_queue_history_and_jobs(mon
         assert by_id["new"]["gpus"] == []
         assert snapshot["summary"]["total"] == 2
         assert {server["id"] for server in client.get("/api/v1/queue").json()["servers"]} == {
-            "gpu01", "new"
+            "gpu01",
+            "new",
         }
         assert {server["id"] for server in client.get("/api/v1/history").json()["servers"]} == {
-            "gpu01", "new"
+            "gpu01",
+            "new",
         }
         transport.calls.clear()
         assert client.get("/api/v1/jobs/absent").status_code == 404
@@ -109,9 +111,7 @@ def test_running_web_uses_current_targets_for_monitor_queue_history_and_jobs(mon
         targets[:] = [targets[1]]
         snapshot = client.get("/api/v1/snapshot").json()
         assert [server["id"] for server in snapshot["servers"]] == ["new"]
-        assert [server["id"] for server in client.get("/api/v1/queue").json()["servers"]] == [
-            "new"
-        ]
+        assert [server["id"] for server in client.get("/api/v1/queue").json()["servers"]] == ["new"]
 
     assert collector.calls.count("ssh-six") == 2
     assert collector.calls.count("ssh-new") == 2
@@ -138,18 +138,27 @@ def test_live_cards_follow_reported_indices_and_keep_disappeared_cards_visible()
     first = asyncio.run(provider.get_snapshot())
     assert [gpu["index"] for gpu in first["servers"][0]["gpus"]] == [2, 7]
     assert first["summary"] == {
-        "total": 2, "idle": 2, "busy": 0, "residual": 0, "unknown": 0, "offline": 0
+        "total": 2,
+        "idle": 2,
+        "busy": 0,
+        "residual": 0,
+        "unknown": 0,
+        "offline": 0,
     }
 
     second = asyncio.run(provider.get_snapshot())
     assert [(gpu["index"], gpu["status"]) for gpu in second["servers"][0]["gpus"]] == [
-        (2, "unknown"), (7, "idle"), (9, "idle")
+        (2, "unknown"),
+        (7, "idle"),
+        (9, "idle"),
     ]
     assert second["servers"][0]["status"] == "degraded"
 
     offline = asyncio.run(provider.get_snapshot())
     assert [(gpu["index"], gpu["status"]) for gpu in offline["servers"][0]["gpus"]] == [
-        (2, "offline"), (7, "offline"), (9, "offline")
+        (2, "offline"),
+        (7, "offline"),
+        (9, "offline"),
     ]
     assert offline["servers"][0]["stale"] is True
 

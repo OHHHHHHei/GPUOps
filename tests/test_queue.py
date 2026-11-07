@@ -45,14 +45,26 @@ def test_gpu_uuid_conflict_is_rejected_after_device_index_changes(tmp_path) -> N
     first = store.enqueue(spec("before-renumber"), now=NOW)
     second = store.enqueue(spec("after-renumber"), now=NOW)
     leased = store.lease(
-        first.run_id, server_id="gpu01", gpu_indices=[4], gpu_uuids={4: "GPU-physical"},
-        worker_id="worker", ttl=timedelta(seconds=30), expected_revision=0, now=NOW,
+        first.run_id,
+        server_id="gpu01",
+        gpu_indices=[4],
+        gpu_uuids={4: "GPU-physical"},
+        worker_id="worker",
+        ttl=timedelta(seconds=30),
+        expected_revision=0,
+        now=NOW,
     )
     assert store.get(first.run_id).allocation.gpu_uuids == leased.allocation.gpu_uuids
     with pytest.raises(ResourceConflict):
         store.lease(
-            second.run_id, server_id="gpu01", gpu_indices=[3], gpu_uuids={3: "GPU-physical"},
-            worker_id="worker", ttl=timedelta(seconds=30), expected_revision=0, now=NOW,
+            second.run_id,
+            server_id="gpu01",
+            gpu_indices=[3],
+            gpu_uuids={3: "GPU-physical"},
+            worker_id="worker",
+            ttl=timedelta(seconds=30),
+            expected_revision=0,
+            now=NOW,
         )
 
 
@@ -142,9 +154,7 @@ def test_event_log_rotates_to_bounded_compressed_archives(tmp_path) -> None:
     assert (tmp_path / "events.jsonl").stat().st_size <= 512
     assert len(archives) <= 2
     assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in archives)
-    assert [event.sequence for event in events] == sorted(
-        event.sequence for event in events
-    )
+    assert [event.sequence for event in events] == sorted(event.sequence for event in events)
     assert len({event.sequence for event in events}) == len(events)
     assert events[-1].sequence == 12
 

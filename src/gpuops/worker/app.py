@@ -141,6 +141,7 @@ def start_worker(
     if status.state == WorkerProcessState.RUNNING:
         ready, reason = worker_readiness(status, server_id=server_id)
         if ready:
+            assert status.identity is not None
             return {"started": False, "status": status.state.value, "pid": status.identity.pid}
         request_worker_stop(paths)
         deadline = time.monotonic() + max(0.0, wait_seconds)

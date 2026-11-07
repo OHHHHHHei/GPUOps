@@ -57,7 +57,7 @@ def _iso(timestamp: float) -> str | None:
 
 
 def _unknown(reason: str, *, path: str, sampled_at: float, record: dict | None = None) -> dict:
-    result = {
+    result: dict[str, object] = {
         "label": "未知",
         "source_kind": "logs",
         "format": "gpuops_progress",

@@ -89,8 +89,9 @@ def estimate(sample: dict, process: dict, path: str, *, now: float) -> dict:
     argv = process["argv"]
     epochs = _total(argv, content, "epoch")
     total_steps = _total(argv, content, "step")
-    epoch_points, step_points = [], []
-    epoch_durations = []
+    epoch_points: list[tuple[int, float]] = []
+    step_points: list[tuple[int, float, int, str]] = []
+    epoch_durations: list[tuple[int, float, int]] = []
     bar = None
     training_finished = False
     lines = [line for line in re.split(r"[\r\n]+", content) if line.strip()]
@@ -110,35 +111,37 @@ def estimate(sample: dict, process: dict, path: str, *, now: float) -> dict:
             and not re.search(r"\b(?:val|valid|validation|eval|evaluation|test)\b", line, re.I)
             and not re.search(r"\b(?:step|batch|microbatch)s?\s*[:=]\s*\d+\s*/", line, re.I)
         ):
-            point = (int(epoch[1]), float(duration[1]), line_index)
-            if epoch_durations and point[0] < epoch_durations[-1][0]:
+            duration_point = (int(epoch[1]), float(duration[1]), line_index)
+            if epoch_durations and duration_point[0] < epoch_durations[-1][0]:
                 epoch_durations.clear()
             if (
                 epoch_durations
-                and point[0] == epoch_durations[-1][0]
-                and point[1] != epoch_durations[-1][1]
+                and duration_point[0] == epoch_durations[-1][0]
+                and duration_point[1] != epoch_durations[-1][1]
             ):
                 return unknown("同一 epoch 有多组耗时，无法确认属于同一训练")
-            if not epoch_durations or point[0] != epoch_durations[-1][0]:
-                epoch_durations.append(point)
+            if not epoch_durations or duration_point[0] != epoch_durations[-1][0]:
+                epoch_durations.append(duration_point)
         # A header saying "Epoch 3" does not prove that epoch 3 has finished.
         if (
             epoch
             and timestamp is not None
             and re.search(r"Average Loss|train time|\bdone\b|\bcompleted\b", line, re.I)
         ):
-            point = (int(epoch[1]), timestamp)
-            if epoch_points and point[0] < epoch_points[-1][0]:
+            epoch_point = (int(epoch[1]), timestamp)
+            if epoch_points and epoch_point[0] < epoch_points[-1][0]:
                 epoch_points.clear()
-            if not epoch_points or point[0] != epoch_points[-1][0]:
-                epoch_points.append(point)
+            if not epoch_points or epoch_point[0] != epoch_points[-1][0]:
+                epoch_points.append(epoch_point)
         step = STEP.search(line)
         if step and timestamp is not None:
-            point = (int(step[2]), timestamp, int(step[3]), step[1].lower())
-            if step_points and (point[0] < step_points[-1][0] or point[2] != step_points[-1][2]):
+            step_point = (int(step[2]), timestamp, int(step[3]), step[1].lower())
+            if step_points and (
+                step_point[0] < step_points[-1][0] or step_point[2] != step_points[-1][2]
+            ):
                 step_points.clear()
-            if not step_points or point[0] != step_points[-1][0]:
-                step_points.append(point)
+            if not step_points or step_point[0] != step_points[-1][0]:
+                step_points.append(step_point)
         progress_bar = BAR.search(line)
         if progress_bar:
             bar = (progress_bar, timestamp, line_index)

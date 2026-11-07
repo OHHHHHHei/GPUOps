@@ -483,8 +483,7 @@ class ControlClient:
         except Exception as error:
             raise self._uncertain(
                 entry,
-                f"cannot reconcile {entry.run_id!r} on {target.server_id}: "
-                f"{_error_text(error)}",
+                f"cannot reconcile {entry.run_id!r} on {target.server_id}: {_error_text(error)}",
                 code=_exception_code(error, "lookup_failed"),
             ) from error
         if existing is not None:
@@ -643,9 +642,7 @@ def _evaluate_host(
     if request.gpus is not None:
         capable = [gpu_by_index.get(index) for index in request.gpus]
         if any(
-            gpu is None
-            or gpu.memory_total_mib is None
-            or gpu.memory_total_mib < request.memory_mib
+            gpu is None or gpu.memory_total_mib is None or gpu.memory_total_mib < request.memory_mib
             for gpu in capable
         ):
             return None

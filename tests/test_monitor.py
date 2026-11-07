@@ -255,9 +255,7 @@ def _cache_document(
             "gpus": [],
         },
         "previous": None,
-        "data": {"hostname": "gpu01", "gpus": [], "collected_at": timestamp}
-        if healthy
-        else None,
+        "data": {"hostname": "gpu01", "gpus": [], "collected_at": timestamp} if healthy else None,
         "error_code": error_code,
     }
 

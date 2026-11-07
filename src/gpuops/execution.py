@@ -13,12 +13,8 @@ from gpuops.ssh import SSHClient, SSHResult
 class HostClient(SSHClient):
     """Share argv/stdin execution and process cleanup with the SSH client."""
 
-    def __init__(
-        self, *, ssh_binary: str = "ssh", connect_timeout_seconds: float = 5.0
-    ) -> None:
-        super().__init__(
-            ssh_binary=ssh_binary, connect_timeout_seconds=connect_timeout_seconds
-        )
+    def __init__(self, *, ssh_binary: str = "ssh", connect_timeout_seconds: float = 5.0) -> None:
+        super().__init__(ssh_binary=ssh_binary, connect_timeout_seconds=connect_timeout_seconds)
         self.local = local_target()
 
     def _is_local(self, host: str) -> bool:

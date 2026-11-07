@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 import fcntl
 import gzip
 import os
@@ -362,7 +363,7 @@ class QueueStore:
         with self._lock():
             return self.index.count(self._all_unlocked)
 
-    def summaries(self, statuses: set[JobStatus] | None = None) -> list[JobSummary]:
+    def summaries(self, statuses: set[JobStatus] | None = None) -> builtins.list[JobSummary]:
         with self._lock():
             return self.index.summaries(self._all_unlocked, statuses)
 
@@ -373,7 +374,7 @@ class QueueStore:
         limit: int = 50,
         project: str | None = None,
         before: tuple[datetime, str, str] | None = None,
-    ) -> list[JobSummary]:
+    ) -> builtins.list[JobSummary]:
         with self._lock():
             return self.index.history(
                 self._all_unlocked,
@@ -383,7 +384,7 @@ class QueueStore:
                 before=before,
             )
 
-    def history_projects(self) -> list[str]:
+    def history_projects(self) -> builtins.list[str]:
         with self._lock():
             return self.index.history_projects(self._all_unlocked)
 
@@ -392,11 +393,11 @@ class QueueStore:
         after: tuple[datetime, str],
         *,
         limit: int = 50,
-    ) -> list[JobSummary]:
+    ) -> builtins.list[JobSummary]:
         with self._lock():
             return self.index.terminal_after(self._all_unlocked, after, limit=limit)
 
-    def events(self) -> list[QueueEvent]:
+    def events(self) -> builtins.list[QueueEvent]:
         with self._lock():
             lines: list[str] = []
             for archive in sorted(self.event_archive_directory.glob("events-*.jsonl.gz")):
@@ -420,7 +421,7 @@ class QueueStore:
         run_id: str,
         *,
         server_id: str,
-        gpu_indices: list[int],
+        gpu_indices: builtins.list[int],
         worker_id: str,
         ttl: timedelta,
         expected_revision: int,
@@ -581,7 +582,7 @@ class QueueStore:
         self._write_unlocked(updated)
         return updated
 
-    def release_expired_leases(self, now: datetime | None = None) -> list[JobRecord]:
+    def release_expired_leases(self, now: datetime | None = None) -> builtins.list[JobRecord]:
         timestamp = now or utc_now()
         released: list[JobRecord] = []
         with self._lock():

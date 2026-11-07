@@ -94,8 +94,8 @@ def explain_job(
         return _unknown_explanation(now, error)
     snapshot_now = clock()
     if not snapshot.is_usable(server_id, max_snapshot_age_seconds, snapshot_now):
-        error = snapshot.error or "GPU snapshot is stale or does not match this worker"
-        return _unknown_explanation(snapshot_now, error)
+        snapshot_error = snapshot.error or "GPU snapshot is stale or does not match this worker"
+        return _unknown_explanation(snapshot_now, snapshot_error)
 
     try:
         active = queue.list(

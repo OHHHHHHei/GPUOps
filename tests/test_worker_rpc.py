@@ -815,7 +815,7 @@ def test_submit_and_health_fail_closed_without_a_live_worker(tmp_path) -> None:
         {"project": []},
         {"project": ""},
         {"cursor": []},
-        {"cursor": "invalid"},
+        {"cursor": "bnVsbA"},  # Valid base64 containing JSON null, not a history key.
     ],
 )
 def test_history_rejects_invalid_params(tmp_path, params) -> None:

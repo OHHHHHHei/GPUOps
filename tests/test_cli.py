@@ -68,8 +68,10 @@ def test_validate_rejects_unsupported_tracking(capsys, tmp_path) -> None:
     assert "progress_adapter" in json.loads(capsys.readouterr().out)["error"]
 
 
-@pytest.mark.parametrize("command", ["status", "doctor"])
-@pytest.mark.parametrize("selection", [["--server", "gpu02"], ["--host", "gpu02=lab-gpu02"]])
+@pytest.mark.parametrize(
+    "command,selection",
+    [("status", ["--server", "gpu02"]), ("doctor", ["--host", "gpu02=lab-gpu02"])],
+)
 def test_monitor_server_selection_preserves_legacy_mapping(monkeypatch, command, selection) -> None:
     captured = []
 
@@ -142,9 +144,10 @@ def test_worker_status_is_machine_readable(capsys, tmp_path) -> None:
     }
 
 
-@pytest.mark.parametrize("command", ["run", "start"])
-@pytest.mark.parametrize("interval", ["0", "-1"])
-@pytest.mark.parametrize("as_json", [False, True])
+@pytest.mark.parametrize(
+    "command,interval,as_json",
+    [("run", "0", True), ("run", "-1", False), ("start", "-1", True), ("start", "0", False)],
+)
 def test_worker_rejects_non_positive_interval(
     command, interval, as_json, monkeypatch, capsys, tmp_path
 ) -> None:

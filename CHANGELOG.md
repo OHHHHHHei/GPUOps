@@ -3,6 +3,12 @@
 Changes are recorded here by release. See [release validation](docs/VALIDATION.md)
 for tested behavior and limits.
 
+## Unreleased
+
+- Add optional email to macOS Worker stop/recovery alerts. Reuse an SMTP settings
+  file with `gpuops alerts enable --email-config`; desktop and email delivery
+  retry independently. No changes to experiment manifests or remote Workers.
+
 ## 0.3.0 — 2026-11-07
 
 - Add optional server-side completion email for succeeded, failed, and cancelled

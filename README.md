@@ -209,10 +209,23 @@ even when the Web console is closed. It sends one notification when it confirms
 a Worker has stopped and another when that Worker is ready again. If SSH fails,
 GPUOps reports the status as unknown instead of sending a stop notification.
 
+To also receive email, reuse the SMTP file from job completion setup:
+
+```bash
+gpuops alerts enable --email-config smtp.json
+gpuops alerts test --json
+```
+
+Desktop and email delivery are tracked independently. A failed channel retries
+on subsequent checks while the event remains relevant. Use
+`gpuops alerts enable --no-email` to return to desktop-only alerts.
+
 Use `gpuops alerts status` (or `gpuops alerts status --json`) to see the latest
-check and `gpuops alerts disable` to turn alerts off. Checks resume after you
+check and delivery errors, and `gpuops alerts disable` to turn both channels off.
+Checks resume after you
 log in; your Mac must be awake and able to reach the servers. Alerts require no
-changes to the remote Workers and do not restart them.
+changes to the remote Workers and do not restart them. See
+[Worker alert email](docs/NOTIFICATIONS.md#worker-alert-email-on-macos) for details.
 
 ## Operating boundary
 

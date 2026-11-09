@@ -73,3 +73,47 @@ These commands manage the standard installed Worker and its default
 `~/.local/state/gpuops` directory. A manually launched development Worker with
 `worker run --state-dir` writes delivery state in that custom directory;
 `notify status` does not read that custom state.
+
+## Worker alert email on macOS
+
+Worker stop/recovery alerts are sent by the Mac's existing alert poller, because
+a stopped Worker cannot send its own email. They are separate from the
+server-side job completion emails above. Reuse the same SMTP settings file:
+
+```bash
+gpuops alerts enable --email-config smtp.json
+gpuops alerts test --json
+gpuops alerts status --json
+```
+
+The settings are copied to `~/.config/gpuops/worker-alerts-email.json` with
+permissions `0600`; credentials are omitted from command output. This local
+configuration does not change the remote Workers or their job email settings.
+`alerts enable` without options retains any saved email settings. Email is off
+until configured. Use `alerts enable --no-email` to remove the local email
+settings and keep desktop notifications, or `alerts disable` to stop both
+channels while retaining the email settings for the next `enable`.
+
+Once a minute, the poller queries all registered Workers over SSH. A confirmed
+`stopped` or `stale` Worker produces a stop alert; recovery to `ready` produces
+a recovery alert. Failed queries (`unknown`) and other non-ready states do not
+produce stop alerts. A stopped Worker does not mean its already-started
+experiments have stopped. No Worker is automatically restarted by these alerts.
+
+Desktop and email delivery each keep their own per-server state. Successful
+delivery suppresses repeats of the same stop/recovery event; a failed channel
+retries on subsequent checks. If a stop email has not succeeded before recovery,
+neither an expired stop email nor an unmatched recovery email is sent. Recovery
+email is retried only while the Worker remains ready. Delivery errors appear
+in `alerts status`; malformed email settings do not prevent desktop alerts.
+SMTP acceptance and saving local delivery state are separate operations, so
+lost SMTP confirmation or a failed state write can lead to duplicate email.
+
+`alerts test` attempts both configured channels independently and exits nonzero
+if either fails. `notification_submitted` means macOS accepted the desktop
+notification; `email_accepted` means SMTP accepted the email, not that it reached
+your inbox. The test never stops a Worker or experiment.
+
+The Mac must be logged in, awake, and able to reach the SSH servers and SMTP
+service. Checks continue with the Web console closed and resume after login.
+`alerts status` reads the latest saved check; it is not a fresh remote query.

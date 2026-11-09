@@ -92,6 +92,23 @@ observations (`servers`). Each observation has a `server_id` and a `status`:
 Check `checked_at` before treating the observations as current. This command
 reads local state only; use `fleet status` for a fresh query.
 
+`alerts enable --email-config CONFIG_FILE` adds local Worker stop/recovery email
+using the same SMTP file format as `notify configure`. `alerts enable --no-email`
+removes local email settings while keeping desktop alerts. These options are
+mutually exclusive and valid only with `enable` (other actions exit 2 with
+`invalid_argument`). Plain `enable` preserves saved settings; `disable` stops
+both channels and retains email settings.
+
+Alert results include `email_configured`, `email_recipient` (nullable), and
+`email_error` (nullable, for configuration errors or test delivery failure).
+Server observations retain `stop_notified` for desktop delivery and add
+`email_stop_notified`, plus optional `notification_error` and `email_error` for
+the latest delivery attempt. Delivery is independently deduplicated per channel.
+`alerts test --json` attempts both configured channels and returns `ok`,
+`notification_submitted`, optional `notification_error`, and `email_accepted`
+when email is configured. It exits 1 on a channel or email configuration failure.
+SMTP acceptance does not prove inbox delivery. Credentials are omitted.
+
 `notify configure CONFIG_FILE`, `notify status`, `notify test`, and `notify disable`
 manage optional server-side completion email. With `--json`, they return `ok`,
 `outcome`, and `servers[]`, with `server_id`, `online`, `ok`, and either `result`

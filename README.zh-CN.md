@@ -162,6 +162,22 @@ gpuops notify test --server gpu-server --json
 
 SMTP 配置示例、状态查询和关闭方法见[任务结束邮件文档](docs/NOTIFICATIONS.md)。
 
+## Mac 上的 Worker 停止提醒
+
+Mac 每分钟检查已注册服务器的 Worker。确认停止后通知一次，恢复就绪后再通知一次；SSH 暂时不通只记为状态未知，不发送停止告警。Web 关闭后仍会检查。
+
+启用桌面通知，并复用任务结束邮件的 SMTP 配置来接收邮件：
+
+```bash
+gpuops alerts enable --email-config smtp.json
+gpuops alerts test --json
+gpuops alerts status --json
+```
+
+桌面通知和邮件分别记录投递结果，失败的渠道在后续检查中重试；如果尚未发出停止邮件就已恢复，不再补发过期告警。`alerts test` 的 `email_accepted: true` 表示邮件服务器已接收，还需在邮箱确认到达。
+
+只需桌面通知时运行 `gpuops alerts enable --no-email`；`gpuops alerts disable` 关闭两种提醒，保留邮箱配置供下次启用。Mac 必须保持唤醒并能访问服务器和邮箱服务。该功能不重启远端 Worker；Worker 停止也不代表已启动的实验停止。
+
 ## 运行边界与维护
 
 GPUOps 在每台服务器的同一个可信 Unix 账户内协调任务。Worker 会避开可见的外部 GPU 进程，包括其他用户的任务；资源租约只协调该账户下的 GPUOps 作业，无法阻止其他用户或绕过 GPUOps 的程序占用显卡。取消操作只会向身份确认过的受管进程发送信号。

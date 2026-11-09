@@ -86,6 +86,47 @@ def send_mail(settings: SMTPSettings, message: EmailMessage) -> None:
         raise MailDeliveryError(delivery_error_message(error)) from None
 
 
+def worker_alert_message(
+    settings: SMTPSettings,
+    *,
+    server_id: str,
+    label: str,
+    recovered: bool,
+    detected_at: str,
+    last_heartbeat: str | None,
+    last_worker_error: str | None,
+) -> EmailMessage:
+    server = " ".join(server_id.split())
+    title = " ".join(label.split())[:120]
+    status = "recovered" if recovered else "stopped"
+    details = [
+        f"Server: {title} ({server})",
+        f"Detected at: {detected_at}",
+        "Worker recovered and is ready to schedule." if recovered else "Worker has stopped.",
+    ]
+    if last_heartbeat:
+        details.append(f"Last heartbeat: {last_heartbeat}")
+    if last_worker_error:
+        details.append(f"Last Worker error: {last_worker_error.splitlines()[0][:320]}")
+    details.extend(
+        [
+            "",
+            "A stopped Worker does not imply that already-started experiments have stopped.",
+            "Reported by the GPUOps alert poller on your Mac.",
+        ]
+    )
+    return _message(settings, f"[GPUOps] Worker {status}: {title} ({server})", "\n".join(details))
+
+
+def worker_alert_test_message(settings: SMTPSettings) -> EmailMessage:
+    return _message(
+        settings,
+        "[GPUOps] Worker alert test (Mac)",
+        "Worker stop/recovery email is configured on your Mac.\n"
+        "This is a test; no Worker or experiment was stopped.",
+    )
+
+
 def delivery_error_message(error: Exception) -> str:
     if isinstance(error, MailDeliveryError):
         return str(error)

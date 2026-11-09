@@ -174,6 +174,11 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["enable", "disable", "status", "test", "_check"],
     )
     alerts.add_argument("--json", action="store_true", dest="as_json")
+    email = alerts.add_mutually_exclusive_group()
+    email.add_argument("--email-config", type=Path, help="with enable: save local SMTP settings")
+    email.add_argument(
+        "--no-email", action="store_true", help="with enable: use desktop alerts only"
+    )
 
     notify = subparsers.add_parser("notify", help="manage server-side job email notifications")
     notification_commands = notify.add_subparsers(dest="notify_action", required=True)
@@ -212,6 +217,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise CommandError(
                 "invalid_argument", "reconcile --list cannot be combined with RUN_ID"
             )
+        if (
+            args.command == "alerts"
+            and args.alerts_command != "enable"
+            and (args.email_config is not None or args.no_email)
+        ):
+            raise CommandError("invalid_argument", "email options require alerts enable")
     except CommandError as error:
         print_error(error_payload(error), as_json="--json" in arguments)
         return 2
@@ -233,7 +244,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         from gpuops.alerts import run_alerts
 
         try:
-            return run_alerts(args.alerts_command, as_json=args.as_json)
+            return run_alerts(
+                args.alerts_command,
+                as_json=args.as_json,
+                email_config=args.email_config,
+                no_email=args.no_email,
+            )
         except (OSError, RuntimeError, ValueError) as error:
             print_error(error_payload(error), as_json=args.as_json)
             return 1

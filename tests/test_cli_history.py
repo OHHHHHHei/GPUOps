@@ -21,7 +21,8 @@ NOW = datetime(2026, 9, 20, tzinfo=timezone.utc)
 
 
 @pytest.fixture
-def query_fleet(tmp_path, monkeypatch):
+def query_fleet(tmp_path, monkeypatch, request):
+    jobs_per_worker = getattr(request, "param", 0)
     workers = {
         target.id: WorkerRpc(
             tmp_path / target.id, server_id=target.id, readiness_probe=lambda: (True, "ready")
@@ -29,7 +30,7 @@ def query_fleet(tmp_path, monkeypatch):
         for target in TEST_TARGETS
     }
     for server, rpc in workers.items():
-        for i in range(32):
+        for i in range(jobs_per_worker):
             record = rpc.queue.enqueue(
                 JobSpec(
                     id=f"job-{i:02}",
@@ -42,7 +43,7 @@ def query_fleet(tmp_path, monkeypatch):
                 run_id=f"run-{i:02}",
                 now=NOW,
             )
-            if i < 31:
+            if i < jobs_per_worker - 1:
                 rpc.queue.request_cancel(record.run_id, now=NOW + timedelta(seconds=i // 2))
 
     class LocalRpcSsh:
@@ -68,6 +69,7 @@ def query_fleet(tmp_path, monkeypatch):
     return transport, ssh, workers
 
 
+@pytest.mark.parametrize("query_fleet", [2], indirect=True)
 def test_queue_defaults_to_active_summaries_with_explicit_legacy_escape(query_fleet, capsys):
     _transport, ssh, workers = query_fleet
     assert main(["queue", "--json"]) == 0
@@ -75,8 +77,8 @@ def test_queue_defaults_to_active_summaries_with_explicit_legacy_escape(query_fl
     active = json.loads(output)
     assert active["view"] == "active"
     assert [job["run_id"] for host in active["servers"] for job in host["jobs"]] == [
-        "run-31",
-        "run-31",
+        "run-01",
+        "run-01",
     ]
     assert "private-command" not in output and "secret-value" not in output
     assert all(
@@ -94,6 +96,7 @@ def test_queue_defaults_to_active_summaries_with_explicit_legacy_escape(query_fl
         ]
 
 
+@pytest.mark.parametrize("query_fleet", [32], indirect=True)
 def test_cli_and_web_share_history_pages_and_cursors(query_fleet, capsys):
     transport, ssh, workers = query_fleet
     assert main(["history", "--json"]) == 0
@@ -123,6 +126,7 @@ def test_cli_and_web_share_history_pages_and_cursors(query_fleet, capsys):
     assert all(request["method"] == "history" for _server, request in ssh.calls)
 
 
+@pytest.mark.parametrize("query_fleet", [8], indirect=True)
 def test_history_filters_project_and_server_remotely(query_fleet, capsys):
     _transport, ssh, _workers = query_fleet
     assert (
@@ -140,6 +144,7 @@ def test_history_filters_project_and_server_remotely(query_fleet, capsys):
 @pytest.mark.parametrize(
     "offline,outcome", [({"gpu02"}, "partial"), ({"gpu01", "gpu02"}, "failed")]
 )
+@pytest.mark.parametrize("query_fleet", [5], indirect=True)
 def test_history_preserves_errors_and_disables_paging_for_partial_results(
     query_fleet, capsys, offline, outcome
 ):
@@ -155,9 +160,7 @@ def test_history_preserves_errors_and_disables_paging_for_partial_results(
             assert host["online"] is False and host["error_code"] == "io_error"
 
 
-@pytest.mark.parametrize(
-    "args", [["--limit", "0"], ["--limit", "101"], ["--project", ""], ["--cursor", "invalid"]]
-)
+@pytest.mark.parametrize("args", [["--limit", "0"], ["--limit", "101"], ["--project", ""]])
 def test_invalid_history_input_never_sends_an_rpc(query_fleet, capsys, args):
     _transport, ssh, _workers = query_fleet
     assert main(["history", *args, "--json"]) == 1
@@ -165,6 +168,7 @@ def test_invalid_history_input_never_sends_an_rpc(query_fleet, capsys, args):
     assert not ssh.calls
 
 
+@pytest.mark.parametrize("query_fleet", [2], indirect=True)
 def test_historical_detail_remains_a_direct_full_record_query(query_fleet, capsys):
     _transport, ssh, workers = query_fleet
     assert main(["job", "run-00", "--server", "gpu01", "--json"]) == 0

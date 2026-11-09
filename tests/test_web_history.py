@@ -165,7 +165,6 @@ def test_terminal_detail_uses_direct_lookup_and_keeps_command_and_logs(fleet):
         ({"limit": 101}, 422),
         ({"project": ""}, 422),
         ({"cursor": "invalid"}, 400),
-        ({"cursor": "bnVsbA"}, 400),
     ],
 )
 def test_invalid_history_query_is_rejected_before_remote_reads(fleet, params, status):

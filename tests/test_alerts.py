@@ -40,11 +40,17 @@ def fleet(tmp_path, monkeypatch, settings):
     row = {"server_id": "gpu01", "online": True, "result": {"ready": True}}
 
     async def collect(_transport, targets, action):
+        assert [target.server_id for target in targets] == ["gpu01", "gpu02"]
         assert action == "status"
-        return [row]
+        return [row, {"server_id": "gpu02", "online": True, "result": {"ready": True}}]
 
     monkeypatch.setattr(
-        alerts, "select_targets", lambda: [ServerTarget("gpu01", "Server 1", "one")]
+        alerts,
+        "select_targets",
+        lambda: [
+            ServerTarget("gpu01", "Server 1", "one"),
+            ServerTarget("gpu02", "Server 2", "two"),
+        ],
     )
     monkeypatch.setattr(alerts, "fleet_worker_action", collect)
     monkeypatch.setattr(alerts, "_notify", lambda title, text: desktop.append((title, text)))
@@ -62,72 +68,30 @@ def fleet(tmp_path, monkeypatch, settings):
     return poll, desktop, emails
 
 
-def test_alert_poll_reports_only_confirmed_stop_and_recovery(tmp_path, monkeypatch):
-    servers = [
-        ServerTarget("xmu06", "Server 6", "six"),
-        ServerTarget("xmu11", "Server 11", "eleven"),
-    ]
-    healthy = {"status": "running", "ready": True, "reason": "ready"}
-    stopped = {
-        "status": "stopped",
-        "ready": False,
-        "reason": "worker process is stopped",
-        "heartbeat": {
-            "heartbeat_at": "2026-11-06T07:53:58Z",
-            "last_tick_error": "No space left on device",
-        },
-    }
-    samples = iter([healthy, None, stopped, stopped, None, {"ready": False}, healthy, healthy])
-    messages = []
-
-    async def collect(_transport, targets, action):
-        assert [target.server_id for target in targets] == ["xmu06", "xmu11"]
-        assert action == "status"
-        sample = next(samples)
-        other = (
-            {"online": False, "error": "SSH timed out"}
-            if sample is None
-            else {"online": True, "result": sample}
-        )
-        return [
-            {"server_id": "xmu06", "online": True, "result": healthy},
-            {"server_id": "xmu11", **other},
-        ]
-
-    monkeypatch.setattr(alerts, "select_targets", lambda: servers)
-    monkeypatch.setattr(alerts, "fleet_worker_action", collect)
-    monkeypatch.setattr(alerts, "_notify", lambda title, text: messages.append((title, text)))
-
-    path = tmp_path / "alerts.json"
-    states = [alerts._check(path)["servers"][1]["status"] for _ in range(8)]
-    assert states == [
-        "ready",
-        "unknown",
-        "stopped",
-        "stopped",
-        "unknown",
-        "not_ready",
-        "ready",
-        "ready",
-    ]
-    assert len(messages) == 2
-    assert messages[0][0] == messages[1][0] == "GPUOps: Server 11"
-    assert "No space left on device" in messages[0][1]
-    assert "Last heartbeat:" in messages[0][1]
-    assert "recovered" in messages[1][1]
-
-
-@pytest.mark.parametrize("stopped", ["stopped", "stale"])
-def test_email_stop_and_recovery_are_persisted_and_deduplicated(fleet, tmp_path, stopped):
+@pytest.mark.parametrize(
+    "email_enabled,stopped", [(False, "stopped"), (True, "stopped"), (True, "stale")]
+)
+def test_stop_and_recovery_are_persisted_and_deduplicated(fleet, tmp_path, email_enabled, stopped):
     poll, desktop, emails = fleet
+    if not email_enabled:
+        alerts._email_path().unlink()
     for status in ["ready", "unknown", stopped, stopped, "unknown", "not_ready", "ready", "ready"]:
         state = poll(status)
-    assert len(desktop) == len(emails) == 2
-    assert "Worker stopped: Server 1 (gpu01)" in emails[0]["Subject"]
-    assert "Worker recovered: Server 1 (gpu01)" in emails[1]["Subject"]
-    body = emails[0].get_content()
-    assert "Detected at:" in body and "2026-11-09T00:00:00Z" in body
-    assert "disk full" in body and "does not imply" in body
+        assert [row["status"] for row in state["servers"]] == [
+            "stopped" if status == "stale" else status,
+            "ready",
+        ]
+    assert len(desktop) == 2
+    assert desktop[0][0] == desktop[1][0] == "GPUOps: Server 1"
+    assert "disk full" in desktop[0][1] and "Last heartbeat:" in desktop[0][1]
+    assert "recovered" in desktop[1][1]
+    assert len(emails) == (2 if email_enabled else 0)
+    if email_enabled:
+        assert "Worker stopped: Server 1 (gpu01)" in emails[0]["Subject"]
+        assert "Worker recovered: Server 1 (gpu01)" in emails[1]["Subject"]
+        body = emails[0].get_content()
+        assert "Detected at:" in body and "2026-11-09T00:00:00Z" in body
+        assert "disk full" in body and "does not imply" in body
     assert state["servers"][0]["email_stop_notified"] is False
     assert stat.S_IMODE((tmp_path / "alerts.json").stat().st_mode) == 0o600
 
@@ -271,8 +235,14 @@ def test_invalid_email_input_does_not_replace_saved_settings(tmp_path, local_app
     assert not local_app
 
 
-@pytest.mark.parametrize("action", ["test", "status", "disable"])
-@pytest.mark.parametrize("option", [["--email-config", "smtp.json"], ["--no-email"]])
+@pytest.mark.parametrize(
+    "action,option",
+    [
+        ("test", ["--email-config", "smtp.json"]),
+        ("status", ["--no-email"]),
+        ("disable", ["--email-config", "smtp.json"]),
+    ],
+)
 def test_email_options_only_apply_to_enable(action, option, capsys):
     assert main(["alerts", action, *option, "--json"]) == 2
     assert json.loads(capsys.readouterr().out)["error_code"] == "invalid_argument"

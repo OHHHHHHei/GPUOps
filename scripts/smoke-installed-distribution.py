@@ -4,6 +4,7 @@
 Run `uv run python scripts/smoke-installed-distribution.py`. An existing wheel can
 be supplied with --wheel. --installer selects pip, uv, or both (the default).
 --legacy-pip seeds the deployed Worker venv with pip 22.0.2 before installation.
+Each client deploys a source archive; the first also verifies wheel deployment.
 Every installation and fake remote home is confined to a temporary directory.
 """
 
@@ -38,8 +39,9 @@ from gpuops.config import load_targets
 from gpuops.deploy import REMOTE_DEPLOY_SCRIPT, REMOTE_STATUS_SCRIPT
 from gpuops.ssh import SSHResult
 
-workspace = Path(sys.argv[1])
+workspace = Path(sys.argv[1]).resolve()
 legacy_pip = len(sys.argv) > 2 and sys.argv[2] == "legacy-pip"
+wheel = Path(sys.argv[3]) if sys.argv[3] else None
 home = workspace / "remote-home"
 home.mkdir()
 client_home = workspace / "client-home"
@@ -52,6 +54,8 @@ assert len(bundled) >= 6 and all(bundled.values())
 from importlib.resources import files
 assert files("gpuops").joinpath("web/static/app.js").is_file()
 assert files("gpuops").joinpath("web/templates/index.html").is_file()
+for name in ("prepare.py", "abort.py", "manage.py"):
+    assert files("gpuops").joinpath("deployment/_bootstrap", name).is_file()
 
 def cli(*arguments):
     completed = subprocess.run(
@@ -128,6 +132,51 @@ def upload(command, *, cwd):
     uploads.append(target)
     return SimpleNamespace(returncode=0, stdout="", stderr="")
 
+def verify_worker_installation(release):
+    assert "include-system-site-packages = false" in (release / "venv/pyvenv.cfg").read_text()
+    assert not (release / ".installing").exists()
+    remote_python = release / "venv/bin/python"
+    executable = release / "venv/bin/gpuops"
+    assert str(remote_python) in executable.read_text()
+    invoked = subprocess.run([str(executable), "--help"],
+                             cwd=workspace, text=True, capture_output=True, check=True)
+    assert "Local GPU compute control plane" in invoked.stdout
+    verified = subprocess.run(
+        [str(remote_python), "-I", "-c",
+         "import json,gpuops,pip; from gpuops.bundled import agent_files; "
+         "from gpuops.deployment.artifacts import build_source_archive; "
+         "from pathlib import Path; "
+         "assert all(agent_files().values()); "
+         "assert build_source_archive(Path.cwd()/'redeploy').path.is_file(); "
+         "print(json.dumps({'version':gpuops.__version__,'module':gpuops.__file__,"
+         "'pip_version':pip.__version__}))"],
+        text=True, capture_output=True, cwd=workspace, check=True,
+    )
+    remote = json.loads(verified.stdout)
+    assert remote["version"] == gpuops.__version__
+    assert str(release) in remote["module"], remote
+    if legacy_pip:
+        assert remote["pip_version"] == "22.0.2", remote
+    notification_status = subprocess.run(
+        [str(remote_python), "-m", "gpuops.notifications.commands", "status",
+         "--server-id", "smoke-local"],
+        text=True, capture_output=True, cwd=workspace, check=True,
+        env={**os.environ, "HOME": str(home)},
+    )
+    notification = json.loads(notification_status.stdout)
+    assert notification["ok"] and not notification["result"]["enabled"]
+    assert not (home / ".config/gpuops/notifications.json").exists()
+    clean_home = workspace / "clean-home"
+    clean_home.mkdir(exist_ok=True)
+    status = subprocess.run(
+        [str(remote_python), "-I", "-c",
+         "from gpuops.deploy import REMOTE_STATUS_SCRIPT; exec(REMOTE_STATUS_SCRIPT)"],
+        text=True, capture_output=True, cwd=workspace, check=True,
+        env={**os.environ, "HOME": str(clean_home)},
+    )
+    assert len(status.stdout.splitlines()) == 1
+    assert json.loads(status.stdout)["action"] == "status"
+
 ssh = LocalSSH()
 class ReadyTransport:
     def __init__(self, **kwargs):
@@ -150,34 +199,24 @@ assert not (client_home / ".codex/skills/gpu-infra").exists()
 assert not (workspace / "codex/skills/gpu-infra").exists()
 assert len(uploads) == 1 and len(ssh.calls) == 3
 release = (home / ".local/share/gpuops/current").resolve()
-assert "include-system-site-packages = false" in (release / "venv/pyvenv.cfg").read_text()
-remote_python = release / "venv/bin/python"
-verified = subprocess.run(
-    [str(remote_python), "-I", "-c",
-     "import json,gpuops,pip; from gpuops.bundled import agent_files; "
-     "from gpuops.deployment.artifacts import build_source_archive; "
-     "from pathlib import Path; "
-     "assert all(agent_files().values()); "
-     "assert build_source_archive(Path.cwd()/'redeploy').path.is_file(); "
-     "print(json.dumps({'version':gpuops.__version__,'module':gpuops.__file__,"
-     "'pip_version':pip.__version__}))"],
-    text=True, capture_output=True, cwd=workspace, check=True,
-)
-remote = json.loads(verified.stdout)
-assert remote["version"] == gpuops.__version__
-assert str(release) in remote["module"], remote
-notification_status = subprocess.run(
-    [str(remote_python), "-m", "gpuops.notifications.commands", "status",
-     "--server-id", "smoke-local"],
-    text=True, capture_output=True, cwd=workspace, check=True,
-    env={**os.environ, "HOME": str(home)},
-)
-notification = json.loads(notification_status.stdout)
-assert notification["ok"] and not notification["result"]["enabled"]
-assert not (home / ".config/gpuops/notifications.json").exists()
+verify_worker_installation(release)
+print("source archive deployment passed")
 if legacy_pip:
-    assert remote["pip_version"] == "22.0.2", remote
     print("source deployment with pip 22.0.2 passed")
+if wheel is not None:
+    release_id, deployment_id = "c" * 32, "d" * 32
+    upload_directory = home / ".cache/gpuops/uploads" / release_id / deployment_id
+    upload_directory.mkdir(parents=True)
+    shutil.copyfile(wheel, upload_directory / wheel.name)
+    deployed = ssh._execute(
+        "smoke-local", REMOTE_DEPLOY_SCRIPT,
+        [release_id, deployment_id, "smoke-local", "smoke-local"], 600,
+    )
+    assert deployed.returncode == 0, deployed.stdout + deployed.stderr
+    assert json.loads(deployed.stdout)["status"]["current_release"] == release_id
+    release = (home / ".local/share/gpuops/current").resolve()
+    verify_worker_installation(release)
+    print("wheel deployment passed")
 skill = Path(cli("skill", "install")["installed"])
 assert skill == workspace / "codex/skills/gpu-infra"
 assert all((skill / name).is_file() for name in bundled)
@@ -185,8 +224,6 @@ for match in re.finditer(r"\[[^\]]+\]\(([^)]+)\)", (skill / "SKILL.md").read_tex
     target = match.group(1)
     if "://" not in target and not target.startswith("#"):
         assert (skill / target.split("#", 1)[0]).exists(), target
-subprocess.run([str(release / "venv/bin/gpuops"), "--help"],
-               cwd=workspace, check=True, capture_output=True)
 print("installed client and deployed Worker OK (" + gpuops.__version__ + ")")
 '''
 
@@ -250,6 +287,7 @@ def main() -> None:
                     CLIENT_SMOKE,
                     str(trial),
                     "legacy-pip" if arguments.legacy_pip else "",
+                    str(wheel) if installer == installers[0] else "",
                 ],
                 cwd=trial,
             )

@@ -6,7 +6,6 @@ import os
 import shlex
 import subprocess
 import sys
-import zipfile
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -491,19 +490,17 @@ def test_remote_worker_lifecycle_allows_one_bounded_slow_iteration() -> None:
     assert namespace["WORKER_LIFECYCLE_TIMEOUT_SECONDS"] >= WORKER_HEARTBEAT_MAX_AGE_SECONDS
 
 
-def test_remote_install_creates_runnable_venv_and_ships_bootstrap_sources(
+def test_activation_reinstall_rollback_and_uninstall_preserve_host_identity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    project_root = Path(__file__).parents[1]
-    artifact = build_wheel(project_root, tmp_path / "dist")
-    with zipfile.ZipFile(artifact.path) as wheel:
-        members = set(wheel.namelist())
-    assert {
-        "gpuops/deployment/_bootstrap/prepare.py",
-        "gpuops/deployment/_bootstrap/abort.py",
-        "gpuops/deployment/_bootstrap/manage.py",
-    } <= members
-
+    artifact = build_wheel(tmp_path, tmp_path / "dist", command_runner=FakeCommandRunner())
+    # Real venv/pip installation is covered by smoke-installed-distribution.py.
+    release = tmp_path / ".local/share/gpuops/releases" / artifact.release_id
+    (release / "venv/bin").mkdir(parents=True)
+    (release / "venv/bin/gpuops").touch()
+    (release / "release.json").write_text(
+        json.dumps({"installed_at": "2026-09-21T00:00:00+00:00"}), encoding="utf-8"
+    )
     deployment_id = "d" * 32
     upload_directory = tmp_path / ".cache/gpuops/uploads" / artifact.release_id / deployment_id
     upload_directory.mkdir(parents=True)
@@ -541,47 +538,6 @@ def test_remote_install_creates_runnable_venv_and_ships_bootstrap_sources(
         "ssh_host": "ssh-gpu",
     }
     assert deployed["status"]["server_id"] == "gpu-node-03"
-    release = tmp_path / ".local/share/gpuops/releases" / artifact.release_id
-    assert "include-system-site-packages = false" in (release / "venv/pyvenv.cfg").read_text()
-    executable = release / "venv/bin/gpuops"
-    assert executable.exists()
-    assert not (release / ".installing").exists()
-    launcher = executable.read_text(encoding="utf-8")
-    assert str(release / "venv/bin/python") in launcher
-    invoked = subprocess.run(
-        [str(executable), "--help"],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert invoked.returncode == 0, invoked.stderr
-    assert "Local GPU compute control plane" in invoked.stdout
-
-    clean_home = tmp_path / "clean-home"
-    clean_home.mkdir()
-    clean_cwd = tmp_path / "clean-cwd"
-    clean_cwd.mkdir()
-    installed_status = subprocess.run(
-        [
-            str(release / "venv/bin/python"),
-            "-I",
-            "-c",
-            "from gpuops.deploy import REMOTE_STATUS_SCRIPT; exec(REMOTE_STATUS_SCRIPT)",
-        ],
-        text=True,
-        capture_output=True,
-        cwd=clean_cwd,
-        env={
-            "HOME": str(clean_home),
-            "PATH": os.environ.get("PATH", ""),
-            "PYTHONNOUSERSITE": "1",
-        },
-        check=False,
-    )
-    assert installed_status.returncode == 0, installed_status.stderr
-    installed_lines = installed_status.stdout.splitlines()
-    assert len(installed_lines) == 1
-    assert json.loads(installed_lines[0])["action"] == "status"
 
     upload_directory.mkdir(parents=True)
     (upload_directory / artifact.filename).write_bytes(artifact.path.read_bytes())

@@ -10,9 +10,12 @@ The CI workflow runs the Python suite and frontend polling tests on Linux with
 Python 3.10 and 3.12. Installed-client checks cover Linux 3.10, Linux 3.12, and
 macOS 3.12 through both pip and uv.
 
-The distribution checks install a wheel outside the source checkout, deploy a
-Worker source archive into a separate environment, verify bundled resources,
-and exercise optional skill installation. Linux 3.10 additionally tests source
+The distribution checks install clients outside the source checkout through pip
+and uv. Each client deploys a Worker source archive; the first also deploys the
+built wheel. Both paths verify isolated environments, executable entry points,
+and bundled resources. These checks also exercise optional skill installation.
+Real venv/pip installation runs here; the Python suite keeps lightweight
+deployment state checks. Linux 3.10 additionally tests source
 installation using pip 22.0.2. Worker environments do not inherit system Python
 packages. These automated tests need no GPU; they use synthetic observations
 for scheduling and real local processes for lifecycle checks.

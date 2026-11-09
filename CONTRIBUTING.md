@@ -47,8 +47,18 @@ cancellation within GPUOps' existing scope.
 ## Check a built distribution
 
 When changing packaging, installation, or packaged resources, install the built
-wheel in a temporary environment and run it outside the checkout. Check
-`gpuops version --json` and the relevant command or packaged skill resource.
+wheel in a temporary environment and run it outside the checkout:
+
+```bash
+uv run python scripts/smoke-installed-distribution.py
+```
+
+This existing CI check builds once, installs clients through pip and uv, and
+tests Worker installation from both a source archive and a wheel. It checks
+isolated environments, runnable entry points, and bundled resources. Regular
+`pytest` checks deployment state transitions without rebuilding or installing
+GPUOps. All installation checks use temporary directories and require no server.
+
 When changing the skill, run the skill-creator `quick_validate.py` tool if it is
 available and review its links and authorization boundaries.
 

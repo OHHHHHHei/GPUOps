@@ -37,7 +37,7 @@ def test_sample_device_uses_only_scoped_queries_and_returns_one_gpu() -> None:
 
     def runner(command, **kwargs):
         calls.append(command)
-        assert kwargs["timeout"] == pytest.approx(6.0, abs=0.01)
+        assert kwargs["timeout"] == 6.0
         if "--query-gpu" in command[3]:
             return completed(
                 command,
@@ -46,7 +46,11 @@ def test_sample_device_uses_only_scoped_queries_and_returns_one_gpu() -> None:
         return completed(command, "")
 
     sample = device_probe(
-        "gpu01", runner=runner, clock=lambda: NOW, sample_timeout_seconds=6.0
+        "gpu01",
+        runner=runner,
+        clock=lambda: NOW,
+        monotonic_clock=lambda: 10.0,
+        sample_timeout_seconds=6.0,
     ).sample_device(DEVICE)
 
     assert sample.snapshot.healthy is True

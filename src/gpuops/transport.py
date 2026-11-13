@@ -19,7 +19,15 @@ from gpuops.core.resources import (
     telemetry_from_mapping,
 )
 from gpuops.execution import HostClient
-from gpuops.models import ACTIVE_JOB_STATUSES, JobRecord, JobSpec, JobStatus, JobSummary, utc_now
+from gpuops.models import (
+    ACTIVE_JOB_STATUSES,
+    JOB_EMAIL_POLICY_KEY,
+    JobRecord,
+    JobSpec,
+    JobStatus,
+    JobSummary,
+    utc_now,
+)
 from gpuops.monitor.collector import RemoteCollector
 from gpuops.ssh import SSHClient
 from gpuops.worker.rpc import RPC_API_VERSION
@@ -57,6 +65,7 @@ _DEFINITIVE_SUBMISSION_REJECTION_CODES = frozenset(
         "invalid_params",
         "method_not_found",
         "run_id_conflict",
+        "unsupported_option",
         "worker_unavailable",
     }
 )
@@ -91,7 +100,17 @@ class SshWorkerTransport:
 
     async def submit(self, target: RemoteTarget, run_id: str, spec: JobSpec) -> JobRecord:
         try:
-            self._require_ready_worker(await self.health(target))
+            health = await self.health(target)
+            self._require_ready_worker(health)
+            capabilities = health.get("capabilities")
+            supports_email_policy = (
+                isinstance(capabilities, dict) and capabilities.get("job_email_policy") is True
+            )
+            if spec.metadata.get(JOB_EMAIL_POLICY_KEY) == "off" and not supports_email_policy:
+                raise RemoteWorkerError(
+                    "unsupported_option",
+                    "remote worker does not support gpuops.email=off; upgrade GPUOps on the server",
+                )
             result = await self._rpc(
                 target,
                 "submit",

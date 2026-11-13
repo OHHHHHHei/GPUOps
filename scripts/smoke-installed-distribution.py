@@ -65,6 +65,10 @@ def cli(*arguments):
     return json.loads(completed.stdout)
 
 assert cli("version", "--json")["version"] == gpuops.__version__
+assert "jobs" in cli("followup", "schema", "--json")["schema"]["properties"]
+assert cli("followup", "capabilities", "--json")["modes"] == ["per_job", "all_terminal"]
+from gpuops.followup_registration import FollowupRequest
+FollowupRequest.model_validate_json(bundled["examples/followup.example.json"])
 example = workspace / "example-job.json"
 example.write_text(bundled["examples/job.example.json"], encoding="utf-8")
 assert cli("validate", str(example), "--json")["valid"]

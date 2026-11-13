@@ -195,21 +195,40 @@ gpuops notify test --server gpu-server --json
 See [Job completion email](docs/NOTIFICATIONS.md) for the SMTP settings and how
 to check status or disable email.
 
-## Continue the original Codex chat after a job (experimental)
+For a job whose only human email should be the later follow-up analysis, submit
+it with `gpuops submit job.json --email off --json`, then select
+`analysis_complete` in the follow-up registration. This per-job override
+requires an updated Worker that advertises the email-policy capability; an
+older Worker rejects it before enqueue and must be upgraded first.
 
-From a local Codex Desktop chat, register an accepted experiment for follow-up:
+## Group experiment follow-ups (experimental)
+
+The original one-job Codex command remains available:
 
 ```bash
 gpuops followup add RUN_ID --action 'Read the saved metrics, update the research record and report here.' --json
 ```
 
-The chat, workspace, and submission destination are inferred. A regular macOS
-checker waits for success, failure, or cancellation, then queues a message for
-that exact chat. The single-job loop has passed live acceptance. Automatic
-execution currently requires the original chat to be loaded in Desktop;
-`queued` does not mean analysis is complete. See [follow-ups](docs/FOLLOWUPS.md)
-for receipts, recovery, and limitations. Groups and other Harnesses are not yet
-supported; existing email settings are independent.
+For a cross-server group, edit
+[`examples/followup.example.json`](examples/followup.example.json) and run:
+
+```bash
+gpuops followup register examples/followup.example.json --json
+```
+
+`per_job` emits one stable event as each member succeeds, fails, or is
+cancelled; `all_terminal` waits for every member and emits one grouped event.
+Harness continuation and human email (`none`, `terminal`, or
+`analysis_complete`) are independently selectable. The original Agent supplies
+the action and context; GPUOps owns observation and routing, not research
+interpretation.
+
+The one-job Codex loop has passed live acceptance; the new group and adapter
+paths are locally tested but not yet live-deployed. Codex automatic execution
+still requires the exact original chat to be loaded in Desktop. A generic
+external adapter is only a JSON/receipt hook and does not claim native Claude
+Code or DeepSeek session support. See [follow-ups](docs/FOLLOWUPS.md) for the
+adapter protocol, explicit receive/complete ACKs, email setup, and limitations.
 
 ## Get Worker alerts on macOS
 

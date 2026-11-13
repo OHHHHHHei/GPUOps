@@ -123,6 +123,9 @@ def build_parser() -> argparse.ArgumentParser:
     submit = subparsers.add_parser("submit", help="durably submit a job to one remote worker")
     submit.add_argument("job_file")
     submit.add_argument("--run-id")
+    submit.add_argument(
+        "--email", choices=["default", "off"], help="override this job's completion email policy"
+    )
     submit.add_argument("--host", help=argparse.SUPPRESS)
     submit.add_argument("--json", action="store_true", dest="as_json")
 
@@ -420,6 +423,15 @@ async def _run_control_command(args: argparse.Namespace) -> int:
         if args.command == "submit":
             raw = sys.stdin.read() if args.job_file == "-" else Path(args.job_file).read_text()
             spec = JobSpec.model_validate_json(raw)
+            if args.email is not None:
+                from gpuops.models import JOB_EMAIL_POLICY_KEY
+
+                metadata = dict(spec.metadata)
+                if args.email == "default":
+                    metadata.pop(JOB_EMAIL_POLICY_KEY, None)
+                else:
+                    metadata[JOB_EMAIL_POLICY_KEY] = args.email
+                spec = spec.model_copy(update={"metadata": metadata})
             if args.host is not None:
                 resources = spec.resources.model_copy(update={"host": args.host})
                 spec = spec.model_copy(update={"resources": resources})

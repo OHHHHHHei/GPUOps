@@ -20,7 +20,9 @@ def test_bundled_agent_files_resolve_the_skill_references() -> None:
         "docs/CLI_CONTRACT.md",
         "docs/PROGRESS.md",
         "docs/NOTIFICATIONS.md",
+        "docs/FOLLOWUPS.md",
         "examples/job.example.json",
+        "examples/followup.example.json",
         "examples/progress.example.py",
     } <= bundled.keys()
     assert all(content.strip() for content in bundled.values())

@@ -139,3 +139,18 @@ def test_new_submission_rejects_tracking_options_the_worker_cannot_honor(
 
 def test_new_submission_accepts_default_tracking_contract() -> None:
     assert validate_new_submission(make_spec()) is None
+
+
+@pytest.mark.parametrize("policy", [None, "default", "off"])
+def test_new_submission_accepts_job_email_policies(policy: str | None) -> None:
+    metadata = {} if policy is None else {"gpuops.email": policy}
+
+    spec = make_spec(metadata=metadata)
+    assert validate_new_submission(spec) is None
+    if policy != "off":
+        assert spec == make_spec()
+
+
+def test_new_submission_rejects_unknown_job_email_policy() -> None:
+    with pytest.raises(ValueError, match="gpuops.email"):
+        validate_new_submission(make_spec(metadata={"gpuops.email": "disabled"}))

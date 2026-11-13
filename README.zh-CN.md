@@ -162,17 +162,35 @@ gpuops notify test --server gpu-server --json
 
 SMTP 配置示例、状态查询和关闭方法见[任务结束邮件文档](docs/NOTIFICATIONS.md)。
 
-## 实验结束后接续原 Codex 聊天（实验性）
+如果某个任务只希望在后续分析完成后发人类邮件，可先运行
+`gpuops submit job.json --email off --json`，再在后续登记中选择
+`analysis_complete`。该单任务覆盖要求远端 Worker 已支持邮件策略能力；旧版
+Worker 会在入队前拒绝，需要先升级服务器上的 GPUOps。
 
-在本地 Codex 桌面原聊天中，Agent 提交任务后可以登记后续动作：
+## 实验组后续动作（实验性）
+
+原有单任务 Codex 命令仍可使用：
 
 ```bash
 gpuops followup add RUN_ID --action '读取已保存的指标，更新研究记录，并在当前聊天汇报。' --json
 ```
 
-聊天、工作区和提交目标默认自动获取。Mac 上的普通程序等待任务成功、失败或取消，再向原聊天投递完成消息，等待期间不调用模型。单任务闭环已通过真实验收：原聊天自动开始新回合，读取结果并完成分析。
+跨服务器任务组可编辑
+[`examples/followup.example.json`](examples/followup.example.json)，然后运行：
 
-目前自动接续要求原聊天已在桌面中加载；消息“已入队”不代表分析已经完成。暂不支持任务组及其他 Harness，现有邮件设置保持独立。状态、恢复方法和适用边界见[原会话接续文档](docs/FOLLOWUPS.md)。
+```bash
+gpuops followup register examples/followup.example.json --json
+```
+
+`per_job` 在每个成员成功、失败或取消时分别产生稳定事件；`all_terminal`
+等待全部成员进入终态，再产生一个聚合事件。Harness 接续与人类邮件（`none`、
+`terminal`、`analysis_complete`）相互独立。原 Agent 提供动作和上下文，GPUOps
+只负责观察与路由，不负责形成研究判断。
+
+单任务 Codex 闭环已通过真实验收；新的任务组和适配器路径目前只完成本地测试，
+尚未重新部署做在线验收。Codex 自动接续仍要求原聊天已在桌面中加载。通用外部
+适配器只是 JSON/回执接口，不代表已原生支持 Claude Code 或 DeepSeek 会话。
+协议、显式接收/完成 ACK、邮件配置和适用边界见[后续动作文档](docs/FOLLOWUPS.md)。
 
 ## Mac 上的 Worker 停止提醒
 

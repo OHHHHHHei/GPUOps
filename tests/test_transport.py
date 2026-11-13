@@ -120,6 +120,67 @@ def test_submit_uses_fixed_remote_command_and_validates_record() -> None:
     assert [call[2]["method"] for call in ssh.calls] == ["health", "submit"]
 
 
+def test_submit_requires_remote_email_policy_capability_for_email_off() -> None:
+    def factory(request):
+        return response(
+            request,
+            {
+                "status": "ok",
+                "durable": True,
+                "worker": {"ready": True, "reason": "ready"},
+            },
+        )
+
+    import asyncio
+
+    job_spec = spec().model_copy(update={"metadata": {"gpuops.email": "off"}})
+    ssh = FakeSsh(factory)
+    with pytest.raises(RemoteSubmissionRejected, match="upgrade GPUOps") as captured:
+        asyncio.run(
+            SshWorkerTransport(ssh=ssh).submit(
+                RemoteTarget("gpu01", "lab-gpu01"), "silent-run", job_spec
+            )
+        )
+
+    assert captured.value.code == "unsupported_option"
+    assert [call[2]["method"] for call in ssh.calls] == ["health"]
+
+
+def test_submit_sends_email_off_when_remote_declares_capability() -> None:
+    def factory(request):
+        if request["method"] == "health":
+            return response(
+                request,
+                {
+                    "status": "ok",
+                    "durable": True,
+                    "worker": {"ready": True, "reason": "ready"},
+                    "capabilities": {"job_email_policy": True},
+                },
+            )
+        return response(
+            request,
+            {
+                "durable": True,
+                "job": job_payload(request["params"]["run_id"])
+                | {"spec": request["params"]["job_spec"]},
+            },
+        )
+
+    import asyncio
+
+    job_spec = spec().model_copy(update={"metadata": {"gpuops.email": "off"}})
+    ssh = FakeSsh(factory)
+    record = asyncio.run(
+        SshWorkerTransport(ssh=ssh).submit(
+            RemoteTarget("gpu01", "lab-gpu01"), "silent-run", job_spec
+        )
+    )
+
+    assert record.spec.metadata["gpuops.email"] == "off"
+    assert [call[2]["method"] for call in ssh.calls] == ["health", "submit"]
+
+
 def test_worker_command_accepts_pretty_printed_json_document() -> None:
     import asyncio
 

@@ -49,6 +49,7 @@ packages = ["src/gpuops"]
 "docs/NOTIFICATIONS.md" = "gpuops/_bundled/agent/docs/NOTIFICATIONS.md"
 "docs/FOLLOWUPS.md" = "gpuops/_bundled/agent/docs/FOLLOWUPS.md"
 "examples/job.example.json" = "gpuops/_bundled/agent/examples/job.example.json"
+"examples/followup.example.json" = "gpuops/_bundled/agent/examples/followup.example.json"
 "examples/progress.example.py" = "gpuops/_bundled/agent/examples/progress.example.py"
 
 [tool.hatch.build.targets.sdist]

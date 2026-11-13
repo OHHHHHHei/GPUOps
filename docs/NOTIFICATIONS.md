@@ -74,6 +74,22 @@ These commands manage the standard installed Worker and its default
 `worker run --state-dir` writes delivery state in that custom directory;
 `notify status` does not read that custom state.
 
+## Choosing email timing for a task group
+
+Use `gpuops submit job.json --email off --json` to suppress the server's
+completion email for that job. The same policy can be saved in the manifest as
+`"metadata": {"gpuops.email": "off"}`. Omit it, or use `default`, to retain the
+server's existing notification policy. Other jobs and Worker alerts are unaffected.
+Older Workers that cannot honor this policy reject `off` before submission;
+upgrade the server's GPUOps installation first.
+
+[Session follow-ups](FOLLOWUPS.md) provide separate client-side group emails at
+`terminal` or `analysis_complete`. For “analyze the whole group, then email me,”
+submit each member with `--email off` and register the group with
+`notify: "analysis_complete"`. Registration does not change a submitted job's
+email policy or recall an already sent email. These group emails require the
+Mac follow-up checker, while ordinary job emails continue to run on the server.
+
 ## Worker alert email on macOS
 
 Worker stop/recovery alerts are sent by the Mac's existing alert poller, because

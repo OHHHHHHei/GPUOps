@@ -52,8 +52,9 @@ The normal error object contains `ok: false`, `error_code`, and a human-readable
 assigned, `run_id` and `server_id`. Do not parse the English error message as a
 machine-readable category. Known codes include `invalid_argument`,
 `invalid_manifest`, `host_unavailable`, `worker_unavailable`, `run_id_conflict`,
-`job_not_found`, `storage_quota_exceeded`, and `io_error`. Other codes remain
-possible; automatic retry is not implied by an unfamiliar code.
+`job_not_found`, `storage_quota_exceeded`, `unsupported_option`, and `io_error`.
+Other codes remain possible; automatic retry is not implied by an unfamiliar
+code.
 
 For `worker run` and `worker start`, a zero or negative `--interval` is rejected
 before starting a Worker. With `--json`, stdout contains
@@ -124,24 +125,84 @@ the message, not that it reached an inbox. See [notification setup](NOTIFICATION
 Email is independent of job submission and never changes the job's result or
 Worker readiness.
 
-## Experimental original-chat follow-ups
+`submit JOB_FILE --email default|off` overrides the job manifest's
+`metadata["gpuops.email"]`. `off` suppresses server-side completion email for
+that job without affecting follow-up email. The client requires the remote
+Worker health response to advertise `capabilities.job_email_policy: true`;
+otherwise submission is definitively rejected before enqueue with
+`unsupported_option` and the Worker must be upgraded. `default` removes the
+per-job override and uses the Worker's configured policy. Automatic placement
+does not filter candidates by this optional capability: upgrade all eligible
+Workers before using `off`, or set `resources.host` to an upgraded Worker.
+
+## Experimental completion groups and session follow-ups
 
 `followup add RUN_ID --action TEXT --json` registers one job for the current
 Codex Desktop chat and enables a local macOS checker. Routing is persisted on
-this client. `--thread UUID`, `--workspace DIR`, and `--server ID` provide explicit
-context when it cannot be inferred. See [the follow-up contract](FOLLOWUPS.md)
-for platform requirements and the loaded-chat limitation.
+this client. `--thread UUID`, `--workspace DIR`, and `--server ID` provide
+explicit context when it cannot be inferred.
 
-`add`, `show ID`, `acknowledge ID`, `complete ID --summary TEXT`, `stop ID`, and
-`retry ID` return `ok` and the follow-up record; `list` returns `ok`,
-`followups[]` (without the saved job/message bodies), and `invalid_records[]`
-(`path` and `error` for each record that could not be read; other follow-ups
-are still checked). Records expose `id`,
-`run_id`, `server_id`, `thread_id`, `workspace`, `action`, `status`, timestamps,
-`error`, `receipt`, and `summary`. `queued` means queue acceptance; `received`
-and `completed` are explicit original-chat acknowledgements. These do not
-change the experiment status. Unknown delivery requires inspection before an
-explicit retry; ordinary transient failures retry automatically.
+`followup register FILE --json` accepts one strict `gpuops.followup/v1` JSON
+document (or `-` for stdin). It contains `jobs[]` (`run_id` and optional
+`server_id`), a `target` (`harness`, optional `session_id`, optional
+`workspace`), `mode`, `action`, string-valued `context`, `resume`, `notify`, and
+optional `name`. `mode` is `per_job` or `all_terminal`. Success, failure, and
+cancellation all satisfy a member's terminal boundary. Members may resolve to
+different servers.
+
+`resume` independently controls Harness delivery. `notify` is `none`,
+`terminal`, or `analysis_complete`; the last requires session continuation and
+a completed analysis summary. `resume: false` records an observation without
+Harness delivery. Non-`none` registration requires client-side follow-up SMTP
+settings installed with `followup configure --email-config FILE --json` (or the
+local Worker-alert SMTP fallback).
+
+Registration enables the macOS LaunchAgent. `followup check --json` publicly
+runs one check, but registration still requires macOS; this is not yet a public
+Linux manual-scheduling workflow. `followup capabilities --json` returns the
+registration/event API versions, modes, notification phases, adapter
+capabilities, email configuration state, `background_platform`, and
+`codex_unloaded_session_wakeup: false`. `followup schema --json` returns the
+registration JSON Schema.
+
+`followup adapter NAME FILE --json` installs an external adapter definition
+with `command[]` and `idempotent`. The adapter receives one
+`gpuops.completion/v1` JSON document on stdin and must return a
+`gpuops.delivery/v1` acceptance document with matching stable `event_id` and a
+durable `receipt`. The request includes `group_id`, target, mode, action,
+context, job snapshots, message, and `trigger_job`; `trigger_job` identifies the
+member for `per_job` and is `null` for `all_terminal`. Adapter acceptance is not
+model receipt or completion. The exact request/response contract, timeout, and
+idempotency limits are in [the follow-up contract](FOLLOWUPS.md). A configured
+adapter does not establish native Claude Code, DeepSeek, or original-session
+support; custom continuity is reported as `unverified`.
+
+`add`, `register`, `show ID`, `acknowledge ID`,
+`complete ID --summary TEXT`, `stop ID`, and `retry ID` return `ok` plus the
+result. `show` and `stop` accept group or event IDs; ACK, completion, and retry
+use event IDs. For an external Harness, ACK/completion/retry accept `--session`
+and require it to equal the registered session. `--session` validates routing;
+it does not establish a connection.
+
+`list` returns `ok`, `followups[]` (without saved job/message bodies),
+`groups[]`, and `invalid_records[]` (`path` and `error`; other records still
+run). Event records add group, mode, context, outcomes, resume/notify, email,
+receipt, and summary fields. Group summaries and their event rows omit saved
+job/message bodies; `show EVENT_ID` returns the full event. Group summaries
+expose members, planned/created events, `all_terminal`, `completed`,
+`completion_kind`, and aggregate status. Explicitly stopping the group yields
+`stopped`; stopping only events derives `delivery_stopped` when all are stopped
+or `partially_stopped` while another planned event remains active.
+`queued` means only delivery acceptance; `received` and `completed` are
+explicit target-session ACKs. `observed` means no Harness continuation was
+requested. None of these states changes experiment status.
+
+Uncertain Codex or non-idempotent adapter delivery requires inspection before
+explicit retry. An adapter marked `idempotent` is trusted to deduplicate the
+stable event ID and may be retried automatically; GPUOps does not verify that
+claim. The existing Codex Desktop loaded-chat limitation remains: queue
+acceptance does not wake an unloaded original chat. New grouped paths are
+locally tested but have not received a new live deployment acceptance.
 
 ## Job lifecycle and execution results
 

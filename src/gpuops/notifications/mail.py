@@ -28,6 +28,19 @@ def _message(settings: SMTPSettings, subject: str, body: str) -> EmailMessage:
     return message
 
 
+def followup_message(
+    settings: SMTPSettings, *, event_id: str, subject: str, body: str
+) -> EmailMessage:
+    """Build a follow-up email with a stable Message-ID for one persisted event."""
+
+    from uuid import UUID
+
+    stable_id = str(UUID(event_id))
+    message = _message(settings, subject, body)
+    message.replace_header("Message-ID", f"<{stable_id}@gpuops.local>")
+    return message
+
+
 def job_message(settings: SMTPSettings, server_id: str, record: JobRecord) -> EmailMessage:
     finished = record.finished_at
     if finished is None:

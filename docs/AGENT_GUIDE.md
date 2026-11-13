@@ -197,16 +197,25 @@ For installation and repair, see
 [Roadmap](https://github.com/OHHHHHHei/GPUOps/blob/main/docs/ROADMAP.md). Published checks and limits are summarized in
 [Release validation](https://github.com/OHHHHHHei/GPUOps/blob/main/docs/VALIDATION.md).
 
-## Experimental original-chat follow-up
+## Experimental completion follow-up
 
-When explicitly requested, a local Codex Desktop Agent can register a submitted
-job with `gpuops followup add RUN_ID --action 'follow-up instructions' --json`.
-The current chat and workspace are inferred; the destination comes from the
-submission journal. Read [follow-up setup and limitations](FOLLOWUPS.md) first.
-This initial integration supports one job and requires the original chat to be
-loaded for automatic queue consumption. `queued` is not proof of model execution;
-the original chat acknowledges receipt and records completed analysis separately.
-Do not replace it with scheduled model polling or claim support for groups yet.
+When explicitly requested, an Agent can register one job with
+`gpuops followup add ...` or a cross-server `gpuops.followup/v1` group with
+`gpuops followup register FILE --json`. `per_job` emits an event for each
+terminal member; `all_terminal` waits for every success, failure, or
+cancellation. The caller must supply the action, context, and routing—GPUOps
+does not infer research intent.
+
+Harness continuation (`resume`) and human email (`none`, `terminal`, or
+`analysis_complete`) are independent. Queue/adapter acceptance is not proof of
+model execution: the target session must acknowledge the event and record a
+nonempty completion summary. External sessions use `--session` for those ACKs.
+
+Read [follow-up setup, adapter protocol, and limitations](FOLLOWUPS.md) first.
+Automatic checking is currently macOS-only. The original Codex chat must still
+be loaded for automatic queue consumption, and a generic adapter does not prove
+native Claude Code, DeepSeek, or original-session support. Group paths are
+locally tested but have not received a new live deployment acceptance.
 
 ## Account and Ownership Scope
 

@@ -1,0 +1,26 @@
+{
+  "api_version": "gpuops.followup/v1",
+  "name": "ablation-round-1",
+  "jobs": [
+    {
+      "run_id": "baseline-01",
+      "server_id": "gpu-a"
+    },
+    {
+      "run_id": "candidate-01",
+      "server_id": "gpu-b"
+    }
+  ],
+  "target": {
+    "harness": "codex-desktop",
+    "workspace": "."
+  },
+  "mode": "all_terminal",
+  "action": "Compare the saved metrics and report the conclusion in this chat.",
+  "context": {
+    "research_question": "Does the candidate improve validation accuracy?",
+    "metrics_file": "metrics.json"
+  },
+  "resume": true,
+  "notify": "none"
+}

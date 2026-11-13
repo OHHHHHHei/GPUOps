@@ -9,7 +9,7 @@ import shlex
 import subprocess
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, Protocol
 from uuid import UUID, uuid4
@@ -60,6 +60,8 @@ class Followup(StrictModel):
     summary: str | None = None
     email_sent_at: datetime | None = None
     email_error: str | None = None
+    email_attempts: int = 0
+    email_next_attempt_at: datetime | None = None
 
 
 class FollowupStore:
@@ -161,21 +163,32 @@ class FollowupStore:
 
 def completion_message(followup: Followup) -> str:
     assert followup.job is not None
-    details = {
+    details: dict[str, Any] = {
         "followup_id": followup.id,
         "event_id": followup.id,
         "group_id": followup.group_id,
         "mode": followup.mode,
-        "server_id": followup.server_id,
-        "run_id": followup.run_id,
-        "status": followup.job.status.value,
-        "exit_code": followup.job.exit_code,
-        "failure_reason": followup.job.failure_reason,
-        "remote_workspace": followup.job.spec.working_directory,
-        "project_workspace": followup.workspace,
-        "jobs": followup.outcomes,
-        "context": followup.context,
     }
+    # An all_terminal event's job is only the last member to finish; its status
+    # must not read as the group's result, so that event lists every job instead.
+    if followup.mode == "per_job":
+        details.update(
+            {
+                "server_id": followup.server_id,
+                "run_id": followup.run_id,
+                "status": followup.job.status.value,
+                "exit_code": followup.job.exit_code,
+                "failure_reason": followup.job.failure_reason,
+                "remote_workspace": followup.job.spec.working_directory,
+            }
+        )
+    details.update(
+        {
+            "project_workspace": followup.workspace,
+            "jobs": followup.outcomes,
+            "context": followup.context,
+        }
+    )
     session_option = (
         ""
         if followup.harness == "codex-desktop"
@@ -298,16 +311,31 @@ async def check_followups(
             store.save(followup)
 
 
+_EMAIL_RETRY_INITIAL = timedelta(minutes=1)
+_EMAIL_RETRY_MAX = timedelta(hours=1)
+
+
+def _email_retry_delay(attempts: int) -> timedelta:
+    # Repeated SMTP logins with bad credentials can get the account throttled or locked.
+    return min(_EMAIL_RETRY_INITIAL * 2 ** min(attempts - 1, 6), _EMAIL_RETRY_MAX)
+
+
 def _deliver_email(
     store: FollowupStore, followup: Followup, sender: Callable[[Followup], None]
 ) -> None:
     if followup.email_sent_at is not None:
         return
+    now = utc_now()
+    if followup.email_next_attempt_at is not None and now < followup.email_next_attempt_at:
+        return
     try:
         sender(followup)
     except (OSError, RuntimeError, ValueError) as error:
+        followup.email_attempts += 1
         followup.email_error = str(error)
+        followup.email_next_attempt_at = now + _email_retry_delay(followup.email_attempts)
     else:
         followup.email_sent_at = utc_now()
         followup.email_error = None
+        followup.email_next_attempt_at = None
     store.save(followup)

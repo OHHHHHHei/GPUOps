@@ -264,3 +264,28 @@ def test_stopped_followup_can_be_registered_again(tmp_path, followup):
     asyncio.run(check_followups(store, transport, delivery))
     saved = store.get(followup.id)
     assert saved.status == "queued" and "New action" in saved.message
+
+
+def test_failed_email_backs_off_exponentially_up_to_one_hour(tmp_path, monkeypatch, followup):
+    from gpuops import followups as module
+
+    store = FollowupStore(tmp_path / "records")
+    now = utc_now()
+    monkeypatch.setattr(module, "utc_now", lambda: now)
+    logins = []
+
+    def sender(_followup):
+        logins.append(now)
+        raise OSError("535 authentication failed")
+
+    delays = []
+    for _ in range(9):
+        module._deliver_email(store, followup, sender)
+        module._deliver_email(store, followup, sender)  # inside the delay: no new login
+        delays.append((followup.email_next_attempt_at - now).total_seconds() / 60)
+        now = followup.email_next_attempt_at
+
+    assert len(logins) == 9
+    assert delays == [1, 2, 4, 8, 16, 32, 60, 60, 60]
+    saved = store.get(followup.id)
+    assert saved.email_attempts == 9 and saved.email_error == "535 authentication failed"

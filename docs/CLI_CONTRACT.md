@@ -186,7 +186,8 @@ it does not establish a connection.
 
 `list` returns `ok`, `followups[]` (without saved job/message bodies),
 `groups[]`, and `invalid_records[]` (`path` and `error`; other records still
-run). Event records add group, mode, context, outcomes, resume/notify, email,
+run). Event records add group, mode, context, outcomes, resume/notify, email
+(`email_sent_at`, `email_error`, `email_attempts`, `email_next_attempt_at`),
 receipt, and summary fields. Group summaries and their event rows omit saved
 job/message bodies; `show EVENT_ID` returns the full event. Group summaries
 expose members, planned/created events, `all_terminal`, `completed`,

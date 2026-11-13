@@ -130,7 +130,15 @@ the saved job/message bodies; use `show EVENT_ID` for the full event.
 For `per_job`, `terminal` can produce one email per member event. For
 `all_terminal`, it produces one group email after all outcomes are terminal.
 Email failure does not block Harness delivery, and Harness failure does not
-block terminal email. SMTP acceptance does not prove inbox delivery.
+block terminal email. A failed email is retried after 1 minute, then 2, 4, and
+so on up to once an hour, so a wrong password does not trigger repeated SMTP
+logins every check; `email_error`, `email_attempts`, and `email_next_attempt_at`
+show the retry state. SMTP acceptance does not prove inbox delivery.
+
+The Harness message for a `per_job` event names its triggering job's
+`server_id`, `run_id`, `status`, and `exit_code`. An `all_terminal` message omits
+these single-job fields and lists every outcome in `jobs`, so the last job to
+finish is not mistaken for the group's result.
 
 Configure the client-side follow-up account once:
 

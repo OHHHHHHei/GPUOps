@@ -1,4 +1,5 @@
 import asyncio
+import json
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -124,6 +125,49 @@ def test_all_terminal_cross_host_waits_for_every_success_failure_and_cancel(tmp_
     events.save(created)
     complete = summarize_group(saved, events)
     assert complete["completed"] is True and complete["status"] == "analysis_complete"
+
+
+def message_details(message: str) -> dict:
+    return json.loads(message[message.index("\n{") + 1 : message.index("\n}\n") + 2])
+
+
+@pytest.mark.parametrize("mode", ["all_terminal", "per_job"])
+def test_message_reports_one_job_status_only_for_per_job_events(tmp_path, mode):
+    groups, events = stores(tmp_path)
+    record = register(
+        groups,
+        events,
+        [
+            RemoteJob(run_id="failed-first", server_id="gpu-a", ssh_host="host-a"),
+            RemoteJob(run_id="succeeded-last", server_id="gpu-b", ssh_host="host-b"),
+        ],
+        mode=mode,
+    )
+    transport = Mock(
+        get_job=AsyncMock(
+            side_effect=[
+                job("failed-first", JobStatus.FAILED, exit_code=1),
+                job("succeeded-last", JobStatus.SUCCEEDED, exit_code=0),
+            ]
+        )
+    )
+
+    asyncio.run(check_groups(groups, events, transport))
+
+    event_ids = (
+        [record.event_id] if mode == "all_terminal" else [m.event_id for m in record.members]
+    )
+    for event_id in event_ids:
+        details = message_details(events.get(event_id).message)
+        assert [(row["run_id"], row["status"]) for row in details["jobs"]] == [
+            ("failed-first", "failed"),
+            ("succeeded-last", "succeeded"),
+        ]
+        if mode == "all_terminal":
+            # The last member to finish succeeded; that must not read as the group result.
+            assert not {"run_id", "status", "exit_code"} & details.keys()
+        else:
+            assert details["status"] == events.get(event_id).job.status.value
 
 
 def test_per_job_creates_each_event_without_waiting_and_never_duplicates(tmp_path):

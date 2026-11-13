@@ -3,6 +3,7 @@
 import json
 import subprocess
 import sys
+from datetime import timedelta
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -128,6 +129,9 @@ print(json.dumps({"api_version": "gpuops.delivery/v1", "event_id": event["event_
     failed_mail = client("show", event_id)
     assert failed_mail["status"] == "completed" and failed_mail["email_error"] == "SMTP offline"
     client("check")
+    assert email.call_count == 1  # still inside the retry delay
+    retry_at = utc_now() + timedelta(minutes=2)
+    monkeypatch.setattr("gpuops.followups.utc_now", lambda: retry_at)
     client("check")
     assert client("show", event_id)["email_sent_at"] is not None
     assert client("show", registered["id"])["status"] == "analysis_complete"
@@ -165,6 +169,9 @@ def test_terminal_email_failure_does_not_block_model_or_repeat_accepted_delivery
     assert delivery.send.call_count == int(resume)
     if resume:
         client("check")
+        assert email.call_count == 1  # still inside the retry delay
+        retry_at = utc_now() + timedelta(minutes=2)
+        monkeypatch.setattr("gpuops.followups.utc_now", lambda: retry_at)
         client("check")
         assert email.call_count == 2
         assert client("show", event_id)["email_sent_at"] is not None

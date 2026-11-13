@@ -124,6 +124,23 @@ the message, not that it reached an inbox. See [notification setup](NOTIFICATION
 Email is independent of job submission and never changes the job's result or
 Worker readiness.
 
+## Experimental original-chat follow-ups
+
+`followup add RUN_ID --action TEXT --json` registers one job for the current
+Codex Desktop chat and enables a local macOS checker. Routing is persisted on
+this client. `--thread UUID`, `--workspace DIR`, and `--server ID` provide explicit
+context when it cannot be inferred. See [the follow-up contract](FOLLOWUPS.md)
+for platform requirements and the loaded-chat limitation.
+
+`add`, `show ID`, `acknowledge ID`, `complete ID --summary TEXT`, `stop ID`, and
+`retry ID` return `ok` and the follow-up record; `list` returns `ok` and
+`followups[]` (without the saved job/message bodies). Records expose `id`,
+`run_id`, `server_id`, `thread_id`, `workspace`, `action`, `status`, timestamps,
+`error`, `receipt`, and `summary`. `queued` means queue acceptance; `received`
+and `completed` are explicit original-chat acknowledgements. These do not
+change the experiment status. Unknown delivery requires inspection before an
+explicit retry; ordinary transient failures retry automatically.
+
 ## Job lifecycle and execution results
 
 Active states are `queued`, `leased`, `starting`, `running`, and

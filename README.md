@@ -195,6 +195,22 @@ gpuops notify test --server gpu-server --json
 See [Job completion email](docs/NOTIFICATIONS.md) for the SMTP settings and how
 to check status or disable email.
 
+## Continue the original Codex chat after a job (experimental)
+
+From a local Codex Desktop chat, register an accepted experiment for follow-up:
+
+```bash
+gpuops followup add RUN_ID --action 'Read the saved metrics, update the research record and report here.' --json
+```
+
+The chat, workspace, and submission destination are inferred. A regular macOS
+checker waits for success, failure, or cancellation, then queues a message for
+that exact chat. The single-job loop has passed live acceptance. Automatic
+execution currently requires the original chat to be loaded in Desktop;
+`queued` does not mean analysis is complete. See [follow-ups](docs/FOLLOWUPS.md)
+for receipts, recovery, and limitations. Groups and other Harnesses are not yet
+supported; existing email settings are independent.
+
 ## Get Worker alerts on macOS
 
 Enable desktop notifications on your Mac:

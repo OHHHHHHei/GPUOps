@@ -30,6 +30,9 @@ class _ArgumentParser(argparse.ArgumentParser):
 def build_parser() -> argparse.ArgumentParser:
     parser = _ArgumentParser(prog="gpuops", description="Local GPU compute control plane")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    from gpuops.followup_commands import add_parser
+
+    add_parser(subparsers)
 
     version = subparsers.add_parser("version", help="show release and interface versions")
     version.add_argument("--json", action="store_true", dest="as_json")
@@ -232,6 +235,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         value = version_info()
         print(json.dumps(value) if args.as_json else f"GPUOps {value['version']}")
         return 0
+    if args.command == "followup":
+        from gpuops.followup_commands import run_command
+
+        return run_command(args)
     if args.command == "skill":
         return asyncio.run(_run_skill_command(args))
     if args.command == "server":

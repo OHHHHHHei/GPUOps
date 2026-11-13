@@ -197,6 +197,17 @@ For installation and repair, see
 [Roadmap](https://github.com/OHHHHHHei/GPUOps/blob/main/docs/ROADMAP.md). Published checks and limits are summarized in
 [Release validation](https://github.com/OHHHHHHei/GPUOps/blob/main/docs/VALIDATION.md).
 
+## Experimental original-chat follow-up
+
+When explicitly requested, a local Codex Desktop Agent can register a submitted
+job with `gpuops followup add RUN_ID --action 'follow-up instructions' --json`.
+The current chat and workspace are inferred; the destination comes from the
+submission journal. Read [follow-up setup and limitations](FOLLOWUPS.md) first.
+This initial integration supports one job and requires the original chat to be
+loaded for automatic queue consumption. `queued` is not proof of model execution;
+the original chat acknowledges receipt and records completed analysis separately.
+Do not replace it with scheduled model polling or claim support for groups yet.
+
 ## Account and Ownership Scope
 
 One Worker and its queue coordinate jobs under one trusted Unix account on a

@@ -13,6 +13,7 @@ _AGENT_FILES = {
     "docs/CLI_CONTRACT.md": "docs/CLI_CONTRACT.md",
     "docs/PROGRESS.md": "docs/PROGRESS.md",
     "docs/NOTIFICATIONS.md": "docs/NOTIFICATIONS.md",
+    "docs/FOLLOWUPS.md": "docs/FOLLOWUPS.md",
     "examples/job.example.json": "examples/job.example.json",
     "examples/progress.example.py": "examples/progress.example.py",
 }

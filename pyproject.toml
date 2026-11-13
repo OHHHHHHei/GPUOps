@@ -47,6 +47,7 @@ packages = ["src/gpuops"]
 "docs/CLI_CONTRACT.md" = "gpuops/_bundled/agent/docs/CLI_CONTRACT.md"
 "docs/PROGRESS.md" = "gpuops/_bundled/agent/docs/PROGRESS.md"
 "docs/NOTIFICATIONS.md" = "gpuops/_bundled/agent/docs/NOTIFICATIONS.md"
+"docs/FOLLOWUPS.md" = "gpuops/_bundled/agent/docs/FOLLOWUPS.md"
 "examples/job.example.json" = "gpuops/_bundled/agent/examples/job.example.json"
 "examples/progress.example.py" = "gpuops/_bundled/agent/examples/progress.example.py"
 

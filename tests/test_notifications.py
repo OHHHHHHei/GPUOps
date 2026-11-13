@@ -186,6 +186,42 @@ def test_failed_delivery_retries_after_restart(tmp_path, queue, spec, settings):
     assert status["retrying_run_id"] is None
 
 
+def test_email_off_advances_past_retry_and_delivers_the_next_job(tmp_path, queue, spec, settings):
+    config_file = tmp_path / "config" / "notifications.json"
+    configure(settings, config_file, NOW)
+    silent = spec.model_copy(update={"metadata": {**spec.metadata, "gpuops.email": "off"}})
+    _cancel(queue, silent, "silent", at=NOW + SECOND)
+    _cancel(queue, spec, "next", at=NOW + 2 * SECOND)
+    service._write_json(
+        tmp_path / "notifications.json",
+        service._NotificationState(
+            enabled_since=NOW,
+            cursor=(NOW, ""),
+            retrying_run_id="silent",
+            last_error="previous failure",
+            next_attempt_at=NOW + timedelta(minutes=1),
+        ),
+    )
+    attempted = []
+    notifier = JobNotifier(
+        queue,
+        "gpu01",
+        tmp_path,
+        config_path=config_file,
+        clock=lambda: NOW + 3 * SECOND,
+        sender=lambda _, message: attempted.append(_run_id(message)),
+    )
+
+    assert notifier.check_once() == 1
+    assert attempted == ["next"]
+    status = notification_status(tmp_path, config_file)
+    assert status["cursor"][1] == "next"
+    assert status["sent_count"] == 1
+    assert status["retrying_run_id"] is None
+    assert status["last_error"] is None
+    assert status["next_attempt_at"] is None
+
+
 def test_failed_state_write_does_not_resend_an_accepted_mail(
     tmp_path,
     queue,

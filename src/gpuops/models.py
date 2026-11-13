@@ -72,6 +72,8 @@ PRIORITY_ORDER: dict[Priority, int] = {
 }
 
 DEFAULT_GPU_MEMORY_HEADROOM_MIB = 1024
+JOB_EMAIL_POLICY_KEY = "gpuops.email"
+JOB_EMAIL_POLICIES = frozenset({"default", "off"})
 
 
 class JobStatus(str, Enum):
@@ -190,6 +192,14 @@ class JobSpec(StrictModel):
     tracking: TrackingSpec = Field(default_factory=TrackingSpec)
     metadata: dict[str, str] = Field(default_factory=dict)
 
+    @field_validator("metadata")
+    @classmethod
+    def normalize_email_policy(cls, value: dict[str, str]) -> dict[str, str]:
+        # Explicit default and omission must have the same retry identity.
+        if value.get(JOB_EMAIL_POLICY_KEY) == "default":
+            value.pop(JOB_EMAIL_POLICY_KEY)
+        return value
+
     @field_validator("command")
     @classmethod
     def validate_command(cls, value: list[str]) -> list[str]:
@@ -213,6 +223,13 @@ class UnsupportedSubmissionOptions(ValueError):
 
 def validate_new_submission(spec: JobSpec) -> None:
     """Reject parsed options that the current submission path cannot honor."""
+
+    email_policy = spec.metadata.get(JOB_EMAIL_POLICY_KEY, "default")
+    if email_policy not in JOB_EMAIL_POLICIES:
+        allowed = ", ".join(repr(value) for value in sorted(JOB_EMAIL_POLICIES))
+        raise UnsupportedSubmissionOptions(
+            f"metadata {JOB_EMAIL_POLICY_KEY!r} must be one of: {allowed}"
+        )
 
     unsupported: list[str] = []
     if spec.tracking.log_path is not None:

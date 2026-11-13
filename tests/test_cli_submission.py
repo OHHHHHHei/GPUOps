@@ -217,6 +217,43 @@ def test_repeated_new_submits_remain_distinct_experiments(submission_context, mo
     assert len(set(calls)) == 2
 
 
+def test_email_override_is_saved_with_existing_metadata(submission_context, monkeypatch, capsys):
+    journal, spec, manifest = submission_context
+    spec.metadata = {"research_question": "baseline"}
+    manifest.write_text(spec.model_dump_json())
+    records = {}
+
+    class Transport:
+        async def get_job(self, target, run_id):
+            return records.get(run_id)
+
+        async def submit(self, target, run_id, spec):
+            records[run_id] = JobRecord(run_id=run_id, spec=spec)
+            return records[run_id]
+
+    monkeypatch.setattr("gpuops.transport.SshWorkerTransport", Transport)
+    assert main(["submit", str(manifest), "--run-id", "silent", "--email", "off", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["submission_state"] == "accepted"
+    assert journal.get("silent").frozen_spec.metadata["gpuops.email"] == "off"
+    assert records["silent"].spec.metadata == {
+        "research_question": "baseline",
+        "gpuops.email": "off",
+    }
+    # An explicit default and an omitted override have the same idempotent submission identity.
+    for options, manifest_policy in (
+        ([], None),
+        (["--email", "default"], "default"),
+        ([], "default"),
+    ):
+        raw = spec.model_dump(mode="json")
+        if manifest_policy:
+            raw["metadata"]["gpuops.email"] = manifest_policy
+        manifest.write_text(json.dumps(raw))
+        assert main(["submit", str(manifest), "--run-id", "ordinary", *options, "--json"]) == 0
+        assert json.loads(capsys.readouterr().out)["submission_state"] == "accepted"
+    assert records["ordinary"].spec.metadata == {"research_question": "baseline"}
+
+
 def test_corrupt_existing_journal_does_not_mean_manifest_rejected(
     submission_context, monkeypatch, capsys
 ):

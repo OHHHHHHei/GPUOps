@@ -155,6 +155,18 @@ def test_submit_rejects_unsupported_tracking_for_a_fresh_run(tmp_path) -> None:
     assert rpc.queue.list() == []
 
 
+def test_submit_rejects_unknown_job_email_policy(tmp_path) -> None:
+    rpc = WorkerRpc(tmp_path, server_id="gpu01")
+    spec = {**job_spec(), "metadata": {"gpuops.email": "disabled"}}
+
+    response = submit(rpc, spec=spec)
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_params"
+    assert "gpuops.email" in response["error"]["message"]
+    assert rpc.queue.list() == []
+
+
 def test_submit_retry_returns_matching_legacy_record_before_new_submission_checks(
     tmp_path,
 ) -> None:
@@ -711,6 +723,7 @@ def test_health_reports_layout_usage_and_injected_budgets(tmp_path) -> None:
     assert response["result"]["server_id"] == "gpu01"
     assert response["result"]["durable"] is True
     assert response["result"]["worker"] == {"ready": True, "reason": "ready"}
+    assert response["result"]["capabilities"] == {"job_email_policy": True}
     assert response["result"]["storage"]["total_budget_bytes"] == 10_000
     assert response["result"]["storage"]["log_budget_bytes"] == 7_000
     assert response["result"]["paths"] == {

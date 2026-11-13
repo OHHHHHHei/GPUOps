@@ -11,7 +11,7 @@ from typing import Any
 from pydantic import AwareDatetime, Field
 
 from gpuops.core.queue import QueueStore
-from gpuops.models import StrictModel, utc_now
+from gpuops.models import JOB_EMAIL_POLICY_KEY, StrictModel, utc_now
 from gpuops.notifications.config import (
     NotificationConfig,
     NotificationConfigError,
@@ -155,8 +155,6 @@ class JobNotifier:
         else:
             self._pending_accepted = None
             state = _active_state(config, _load_state(self.state_path))
-        if state.next_attempt_at is not None and self.clock() < state.next_attempt_at:
-            return 0
         assert state.cursor is not None
         delivered = 0
         for job in self.store.terminal_after(state.cursor, limit=_BATCH_SIZE):
@@ -165,6 +163,20 @@ class JobNotifier:
             if delivered and load_config(self.config_path) != config:
                 break
             record = self.store.get(job.run_id)
+            assert job.finished_at is not None
+            if record.spec.metadata.get(JOB_EMAIL_POLICY_KEY) == "off":
+                state = state.model_copy(
+                    update={
+                        "cursor": (job.finished_at, job.run_id),
+                        "retrying_run_id": None,
+                        "last_error": None,
+                        "next_attempt_at": None,
+                    }
+                )
+                self._save_accepted(state)
+                continue
+            if state.next_attempt_at is not None and self.clock() < state.next_attempt_at:
+                break
             message = job_message(config.smtp, self.server_id, record)
             if self._stop.is_set():
                 break
@@ -180,7 +192,6 @@ class JobNotifier:
                 )
                 _write_json(self.state_path, state)
                 break
-            assert job.finished_at is not None
             state = state.model_copy(
                 update={
                     "cursor": (job.finished_at, job.run_id),

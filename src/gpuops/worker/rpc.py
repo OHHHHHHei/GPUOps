@@ -385,6 +385,7 @@ class WorkerRpc:
                 "total_budget_bytes": self.storage.total_budget_bytes,
                 "log_budget_bytes": self.storage.log_budget_bytes,
             },
+            "capabilities": {"job_email_policy": True},
             "paths": {"queue": "queue", "runs": "runs", "logs": "logs"},
         }
 

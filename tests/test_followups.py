@@ -8,7 +8,13 @@ import pytest
 
 from gpuops import followup_commands
 from gpuops.cli import main
-from gpuops.followups import CodexQueue, Followup, FollowupStore, check_followups
+from gpuops.followups import (
+    CodexQueue,
+    Followup,
+    FollowupStore,
+    check_followups,
+    completion_message,
+)
 from gpuops.models import JobRecord, JobSpec, JobStatus, utc_now
 
 
@@ -183,3 +189,78 @@ def test_unknown_delivery_can_be_explicitly_retried_from_original_chat(
     monkeypatch.setenv("CODEX_THREAD_ID", followup.thread_id)
     assert main(["followup", "retry", followup.id, "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["status"] == "ready"
+
+
+TOP_LEVEL_HELP = (
+    "Codex CLI\n\nUsage: codex [OPTIONS] [PROMPT]\n\n"
+    "  queue  Queue a message for an existing session\n"
+)
+QUEUE_HELP = "Usage: codex queue [OPTIONS] --thread <THREAD> --message <TEXT>\n"
+
+
+@pytest.mark.parametrize("supported", [False, True])
+def test_enable_requires_the_queue_subcommand_help(tmp_path, monkeypatch, supported):
+    # Unknown subcommands print Codex's top-level help and still exit 0.
+    help_text = QUEUE_HELP if supported else TOP_LEVEL_HELP
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        if command[1:] == ["queue", "--help"]:
+            return subprocess.CompletedProcess(command, 0, help_text, "")
+        return subprocess.CompletedProcess(command, int(command[1] == "print"), "", "")
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(followup_commands.sys, "platform", "darwin")
+    monkeypatch.setattr(followup_commands.shutil, "which", lambda _name: "/tools/codex")
+    monkeypatch.setattr(followup_commands.subprocess, "run", run)
+    plist = tmp_path / "Library/LaunchAgents" / f"{followup_commands.LABEL}.plist"
+
+    if not supported:
+        with pytest.raises(ValueError, match="does not support queue"):
+            followup_commands.enable(tmp_path)
+        assert calls == [["/tools/codex", "queue", "--help"]]
+        assert not plist.exists()
+        return
+    followup_commands.enable(tmp_path)
+    assert plist.exists()
+    assert calls[-1][:2] == ["launchctl", "bootstrap"]
+
+
+def test_unreadable_record_does_not_block_other_followups(tmp_path, monkeypatch, capsys, followup):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    store = FollowupStore(tmp_path / ".local/state/gpuops/followups/records")
+    store.add(followup)
+    unreadable = store.directory / "00000000-0000-4000-8000-0000000000ff.json"
+    unreadable.write_text('{"unexpected": true}')
+    transport = Mock(get_job=AsyncMock(return_value=job(JobStatus.SUCCEEDED)))
+    delivery = Mock(send=Mock(return_value=subprocess.CompletedProcess([], 0, "accepted", "")))
+
+    asyncio.run(check_followups(store, transport, delivery))
+
+    assert store.get(followup.id).status == "queued"
+    assert main(["followup", "list", "--json"]) == 0
+    listing = json.loads(capsys.readouterr().out)
+    assert [row["id"] for row in listing["followups"]] == [followup.id]
+    assert [row["path"] for row in listing["invalid_records"]] == [str(unreadable)]
+
+
+def test_stopped_followup_can_be_registered_again(tmp_path, followup):
+    store = FollowupStore(tmp_path / "records")
+    store.add(followup)
+    # Stopped after the job finished, before delivery started.
+    followup.status = "stopped"
+    followup.job = job(JobStatus.SUCCEEDED)
+    followup.message = completion_message(followup)
+    store.save(followup)
+
+    again = store.add(followup.model_copy(update={"id": "another-id", "action": "New action"}))
+
+    assert again.id == followup.id
+    assert again.status == "waiting" and again.action == "New action"
+    assert again.job is None and again.message is None
+    transport = Mock(get_job=AsyncMock(return_value=job(JobStatus.SUCCEEDED)))
+    delivery = Mock(send=Mock(return_value=subprocess.CompletedProcess([], 0, "accepted", "")))
+    asyncio.run(check_followups(store, transport, delivery))
+    saved = store.get(followup.id)
+    assert saved.status == "queued" and "New action" in saved.message

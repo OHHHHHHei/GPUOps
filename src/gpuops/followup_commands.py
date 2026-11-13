@@ -50,8 +50,11 @@ def enable(root: Path) -> None:
     executable = shutil.which("codex")
     if executable is None:
         raise ValueError("install a Codex CLI with the queue command first")
-    result = subprocess.run([executable, "queue", "--help"], capture_output=True, timeout=10)
-    if result.returncode:
+    # Codex prints its top-level help with status 0 for unknown subcommands.
+    result = subprocess.run(
+        [executable, "queue", "--help"], capture_output=True, text=True, timeout=10
+    )
+    if result.returncode or not _supports_queue(result.stdout):
         raise ValueError("the installed Codex CLI does not support queue")
     settings = {
         "executable": executable,
@@ -89,6 +92,10 @@ def enable(root: Path) -> None:
         capture_output=True,
         timeout=15,
     )
+
+
+def _supports_queue(help_text: str) -> bool:
+    return "Usage: codex queue" in help_text and "--thread" in help_text
 
 
 def register(args: argparse.Namespace, store: FollowupStore, root: Path) -> Followup:
@@ -138,10 +145,12 @@ def run_command(args: argparse.Namespace) -> int:
         if action == "add":
             result = register(args, store, root).model_dump(mode="json")
         elif action == "list":
+            followups, invalid = store.scan()
             result = {
                 "followups": [
-                    row.model_dump(mode="json", exclude={"job", "message"}) for row in store.list()
-                ]
+                    row.model_dump(mode="json", exclude={"job", "message"}) for row in followups
+                ],
+                "invalid_records": invalid,
             }
         elif action == "disable":
             subprocess.run(

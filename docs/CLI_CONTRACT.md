@@ -133,8 +133,10 @@ context when it cannot be inferred. See [the follow-up contract](FOLLOWUPS.md)
 for platform requirements and the loaded-chat limitation.
 
 `add`, `show ID`, `acknowledge ID`, `complete ID --summary TEXT`, `stop ID`, and
-`retry ID` return `ok` and the follow-up record; `list` returns `ok` and
-`followups[]` (without the saved job/message bodies). Records expose `id`,
+`retry ID` return `ok` and the follow-up record; `list` returns `ok`,
+`followups[]` (without the saved job/message bodies), and `invalid_records[]`
+(`path` and `error` for each record that could not be read; other follow-ups
+are still checked). Records expose `id`,
 `run_id`, `server_id`, `thread_id`, `workspace`, `action`, `status`, timestamps,
 `error`, `receipt`, and `summary`. `queued` means queue acceptance; `received`
 and `completed` are explicit original-chat acknowledgements. These do not

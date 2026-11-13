@@ -73,11 +73,19 @@ class FollowupStore:
     def get(self, followup_id: str) -> Followup:
         return Followup.model_validate_json(self._path(followup_id).read_bytes())
 
+    def scan(self) -> tuple[list[Followup], list[dict[str, str]]]:
+        """Read every record; an unreadable one is reported instead of blocking the rest."""
+        followups: list[Followup] = []
+        invalid: list[dict[str, str]] = []
+        for path in sorted(self.directory.glob("*.json")):
+            try:
+                followups.append(Followup.model_validate_json(path.read_bytes()))
+            except (OSError, ValueError) as error:
+                invalid.append({"path": str(path), "error": str(error)})
+        return followups, invalid
+
     def list(self) -> list[Followup]:
-        return [
-            Followup.model_validate_json(path.read_bytes())
-            for path in self.directory.glob("*.json")
-        ]
+        return self.scan()[0]
 
     def save(self, followup: Followup) -> None:
         atomic_write_bytes(self._path(followup.id), followup.model_dump_json(indent=2).encode())
@@ -90,6 +98,22 @@ class FollowupStore:
                     followup.server_id,
                     followup.thread_id,
                 ):
+                    if existing.status == "stopped":
+                        # Stop only applies before delivery, so nothing reached the chat.
+                        reactivated = existing.model_copy(
+                            update={
+                                "ssh_host": followup.ssh_host,
+                                "workspace": followup.workspace,
+                                "action": followup.action,
+                                "status": "waiting",
+                                "checked_at": None,
+                                "job": None,
+                                "message": None,
+                                "error": None,
+                            }
+                        )
+                        self.save(reactivated)
+                        return reactivated
                     if (existing.workspace, existing.action) != (
                         followup.workspace,
                         followup.action,

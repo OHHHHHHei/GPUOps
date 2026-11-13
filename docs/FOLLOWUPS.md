@@ -31,7 +31,8 @@ this client did not submit the job. A saved submission's server cannot be
 overridden. Repeating the same registration returns the existing follow-up.
 
 The first registration enables a macOS LaunchAgent that checks every 30 seconds.
-It requires an installed Codex CLI with `codex queue`, the same Codex home used
+It requires an installed Codex CLI whose `codex queue --help` shows the queue
+command (older CLIs are rejected at registration), the same Codex home used
 by Desktop, and SSH access to the experiment server. No Worker upgrade or new
 job-manifest fields are needed. Register only when the user requested follow-up.
 
@@ -81,7 +82,9 @@ original chat. If it arrived, acknowledge it instead. This is not an exactly-onc
 delivery guarantee.
 
 `gpuops followup stop FOLLOWUP_ID --json` stops a waiting/pending follow-up. It
-cannot recall a message already handed to Codex. `gpuops followup disable`
+cannot recall a message already handed to Codex. Running `add` again for the
+same job and chat re-registers a stopped follow-up, optionally with a new
+action. `gpuops followup disable`
 unloads the local checker and retains records; a later `add` enables it again.
 Neither command cancels experiments.
 

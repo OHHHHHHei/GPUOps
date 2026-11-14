@@ -7,7 +7,6 @@ from pydantic import ValidationError
 
 from gpuops.models import (
     DEFAULT_GPU_MEMORY_HEADROOM_MIB,
-    JobRecord,
     JobSpec,
     ResourceRequest,
     validate_new_submission,
@@ -98,47 +97,6 @@ def test_environment_variable_names_are_validated() -> None:
 def test_unknown_fields_are_rejected() -> None:
     with pytest.raises(ValidationError, match="Extra inputs"):
         make_spec(unexpected=True)
-
-
-def test_legacy_tracking_fields_remain_readable_in_persisted_records() -> None:
-    record = JobRecord.model_validate(
-        {
-            "run_id": "legacy-tracking",
-            "spec": make_spec(
-                tracking={
-                    "log_path": "/legacy/train.log",
-                    "output_directory": "/legacy/output",
-                    "progress_adapter": "legacy-jsonl",
-                }
-            ).model_dump(mode="json"),
-        }
-    )
-
-    assert record.spec.tracking.log_path == "/legacy/train.log"
-    assert record.spec.tracking.output_directory == "/legacy/output"
-    assert record.spec.tracking.progress_adapter == "legacy-jsonl"
-    assert JobRecord.model_validate_json(record.model_dump_json()) == record
-
-
-@pytest.mark.parametrize(
-    ("tracking", "unsupported_field"),
-    [
-        ({"log_path": "/tmp/train.log"}, "tracking.log_path"),
-        ({"output_directory": "/tmp/output"}, "tracking.output_directory"),
-        ({"progress_adapter": "jsonl"}, "tracking.progress_adapter"),
-    ],
-)
-def test_new_submission_rejects_tracking_options_the_worker_cannot_honor(
-    tracking: dict[str, str], unsupported_field: str
-) -> None:
-    spec = make_spec(tracking=tracking)
-
-    with pytest.raises(ValueError, match=unsupported_field):
-        validate_new_submission(spec)
-
-
-def test_new_submission_accepts_default_tracking_contract() -> None:
-    assert validate_new_submission(make_spec()) is None
 
 
 @pytest.mark.parametrize("policy", [None, "default", "off"])

@@ -118,11 +118,6 @@ def test_literal_legacy_record_builds_index_on_first_summary_read(tmp_path) -> N
                 "not_before": None,
                 "deadline": None,
             },
-            "tracking": {
-                "log_path": None,
-                "output_directory": None,
-                "progress_adapter": "none",
-            },
             "metadata": {"name": "Legacy display"},
         },
         "status": "succeeded",

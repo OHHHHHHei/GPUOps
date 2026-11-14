@@ -270,7 +270,7 @@ def test_corrupt_existing_journal_does_not_mean_manifest_rejected(
 
 def test_unsupported_new_options_are_definitively_rejected(submission_context, monkeypatch, capsys):
     journal, spec, manifest = submission_context
-    spec.tracking.progress_adapter = "unsupported"
+    spec.metadata["gpuops.email"] = "disabled"
     manifest.write_text(spec.model_dump_json())
     monkeypatch.setattr("gpuops.transport.SshWorkerTransport", lambda: object())
     assert main(["submit", str(manifest), "--run-id", "new-run", "--json"]) == 1

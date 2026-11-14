@@ -174,12 +174,6 @@ class ScheduleSpec(StrictModel):
         return self
 
 
-class TrackingSpec(StrictModel):
-    log_path: str | None = None
-    output_directory: str | None = None
-    progress_adapter: str = "none"
-
-
 class JobSpec(StrictModel):
     api_version: Literal["gpuops/v1"] = "gpuops/v1"
     id: str = Field(min_length=1, max_length=96, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -189,7 +183,6 @@ class JobSpec(StrictModel):
     resources: ResourceRequest = Field(default_factory=ResourceRequest)
     runtime: RuntimeSpec = Field(default_factory=RuntimeSpec)
     schedule: ScheduleSpec = Field(default_factory=ScheduleSpec)
-    tracking: TrackingSpec = Field(default_factory=TrackingSpec)
     metadata: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("metadata")
@@ -229,18 +222,6 @@ def validate_new_submission(spec: JobSpec) -> None:
         allowed = ", ".join(repr(value) for value in sorted(JOB_EMAIL_POLICIES))
         raise UnsupportedSubmissionOptions(
             f"metadata {JOB_EMAIL_POLICY_KEY!r} must be one of: {allowed}"
-        )
-
-    unsupported: list[str] = []
-    if spec.tracking.log_path is not None:
-        unsupported.append("tracking.log_path")
-    if spec.tracking.output_directory is not None:
-        unsupported.append("tracking.output_directory")
-    if spec.tracking.progress_adapter != "none":
-        unsupported.append("tracking.progress_adapter")
-    if unsupported:
-        raise UnsupportedSubmissionOptions(
-            "new submissions do not support these tracking options: " + ", ".join(unsupported)
         )
 
 

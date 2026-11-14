@@ -152,7 +152,7 @@ def test_submit_normalizes_omitted_gpu_count_for_exact_gpu_requests(tmp_path) ->
     assert resources["gpu_count"] == 2
 
 
-def test_submit_rejects_unsupported_tracking_for_a_fresh_run(tmp_path) -> None:
+def test_submit_rejects_removed_tracking_field(tmp_path) -> None:
     rpc = WorkerRpc(tmp_path, server_id="gpu01")
     spec = {**job_spec(), "tracking": {"output_directory": "/legacy/output"}}
 
@@ -160,7 +160,7 @@ def test_submit_rejects_unsupported_tracking_for_a_fresh_run(tmp_path) -> None:
 
     assert response["ok"] is False
     assert response["error"]["code"] == "invalid_params"
-    assert "tracking.output_directory" in response["error"]["message"]
+    assert response["error"]["details"]["errors"][0]["location"] == ["tracking"]
     assert rpc.queue.list() == []
 
 
@@ -176,25 +176,24 @@ def test_submit_rejects_unknown_job_email_policy(tmp_path) -> None:
     assert rpc.queue.list() == []
 
 
-def test_submit_retry_returns_matching_legacy_record_before_new_submission_checks(
+def test_submit_retry_accepts_inferred_gpu_count(
     tmp_path,
 ) -> None:
     rpc = WorkerRpc(tmp_path, server_id="gpu01")
-    legacy_spec = JobSpec.model_validate(
+    spec = JobSpec.model_validate(
         {
             **job_spec(),
             "resources": {"host": "gpu01", "gpu_count": 2, "gpus": [3, 1]},
-            "tracking": {"progress_adapter": "legacy-jsonl"},
         }
     )
-    existing = rpc.queue.enqueue(legacy_spec, run_id="legacy-run")
-    cross_version_payload = legacy_spec.model_dump(mode="json")
-    del cross_version_payload["resources"]["gpu_count"]
+    existing = rpc.queue.enqueue(spec, run_id="gpu-count-retry")
+    retry_payload = spec.model_dump(mode="json")
+    del retry_payload["resources"]["gpu_count"]
 
     response = rpc.handle(
         envelope(
             "submit",
-            {"run_id": "legacy-run", "job_spec": cross_version_payload},
+            {"run_id": "gpu-count-retry", "job_spec": retry_payload},
         )
     )
 

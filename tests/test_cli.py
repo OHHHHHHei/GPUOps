@@ -54,19 +54,19 @@ def test_validate_minimal_exact_gpu_manifest(capsys, tmp_path) -> None:
     assert resources["gpus"] == [0, 1]
 
 
-def test_validate_rejects_unsupported_tracking(capsys, tmp_path) -> None:
+def test_validate_rejects_removed_tracking_field(capsys, tmp_path) -> None:
     spec = JobSpec(
         id="tracking",
         project="tests",
         command=["true"],
         working_directory="/work",
-        tracking={"progress_adapter": "imaginary"},
-    )
+    ).model_dump(mode="json")
+    spec["tracking"] = {"progress_adapter": "none"}
     manifest = tmp_path / "job.json"
-    manifest.write_text(spec.model_dump_json())
+    manifest.write_text(json.dumps(spec))
 
     assert main(["validate", str(manifest), "--json"]) == 2
-    assert "progress_adapter" in json.loads(capsys.readouterr().out)["error"]
+    assert "tracking" in json.loads(capsys.readouterr().out)["error"]
 
 
 @pytest.mark.parametrize(

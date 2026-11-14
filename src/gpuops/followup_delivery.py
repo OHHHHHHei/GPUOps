@@ -100,27 +100,6 @@ def read_email_settings() -> SMTPSettings | None:
             return None
 
 
-def _legacy_job_summary(followup: Followup) -> list[dict[str, Any]]:
-    job = followup.job
-    if job is None:
-        return []
-    return [
-        {
-            "server_id": followup.server_id,
-            "run_id": job.run_id,
-            "status": job.status.value,
-            "exit_code": job.exit_code,
-            "failure_reason": job.failure_reason,
-            "remote_workspace": job.spec.working_directory,
-            "project_workspace": followup.workspace,
-        }
-    ]
-
-
-def _jobs(followup: Followup) -> list[dict[str, Any]]:
-    return followup.outcomes or _legacy_job_summary(followup)
-
-
 def send_followup_email(followup: Followup) -> None:
     settings = read_email_settings()
     if settings is None:
@@ -143,7 +122,7 @@ def send_followup_email(followup: Followup) -> None:
                 f"Requested action: {followup.action}",
                 "",
                 "Experiment outcomes:",
-                json.dumps(_jobs(followup), ensure_ascii=False, indent=2, default=str),
+                json.dumps(followup.outcomes, ensure_ascii=False, indent=2, default=str),
             ]
         )
     elif followup.notify == "analysis_complete":
@@ -263,7 +242,7 @@ def _adapter_request(followup: Followup) -> dict[str, Any]:
         ),
         "action": followup.action,
         "context": followup.context,
-        "jobs": _jobs(followup),
+        "jobs": followup.outcomes,
         "message": followup.message,
     }
 

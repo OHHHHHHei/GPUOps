@@ -14,6 +14,7 @@ from gpuops.followups import (
     FollowupStore,
     check_followups,
     completion_message,
+    job_outcome,
 )
 from gpuops.models import JobRecord, JobSpec, JobStatus, utc_now
 
@@ -59,6 +60,19 @@ def test_completion_survives_offline_restart_and_is_delivered_once(tmp_path, fol
     assert delivery.send.call_count == 1
     assert saved.status == "queued" and saved.received_at is None
     assert saved.job.status == terminal and saved.error is None
+    assert saved.outcomes == [
+        {
+            "server_id": "gpu01",
+            "run_id": "experiment-1",
+            "status": terminal.value,
+            "exit_code": None,
+            "failure_reason": None,
+            "remote_workspace": "/data/research",
+            "project_workspace": followup.workspace,
+        }
+    ]
+    details = json.loads(saved.message.split("\n", 2)[2].split("\n\n", 1)[0])
+    assert details["jobs"] == saved.outcomes and details["status"] == terminal.value
     assert followup.id in saved.message and followup.action in saved.message
     assert saved.receipt == "queue receipt"
 
@@ -251,6 +265,7 @@ def test_stopped_followup_can_be_registered_again(tmp_path, followup):
     # Stopped after the job finished, before delivery started.
     followup.status = "stopped"
     followup.job = job(JobStatus.SUCCEEDED)
+    followup.outcomes = [job_outcome(followup.server_id, followup.run_id, followup.job)]
     followup.message = completion_message(followup)
     store.save(followup)
 
@@ -259,6 +274,7 @@ def test_stopped_followup_can_be_registered_again(tmp_path, followup):
     assert again.id == followup.id
     assert again.status == "waiting" and again.action == "New action"
     assert again.job is None and again.message is None
+    assert again.outcomes == []
     transport = Mock(get_job=AsyncMock(return_value=job(JobStatus.SUCCEEDED)))
     delivery = Mock(send=Mock(return_value=subprocess.CompletedProcess([], 0, "accepted", "")))
     asyncio.run(check_followups(store, transport, delivery))

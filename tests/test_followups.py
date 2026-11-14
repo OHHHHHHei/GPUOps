@@ -45,7 +45,7 @@ def checker(monkeypatch):
 
         transport = Mock(watch=AsyncMock(side_effect=watch))
         monkeypatch.setattr(background, "SshWorkerTransport", lambda **_: transport)
-        monkeypatch.setattr(background, "DeliveryRouter", lambda _queue: delivery)
+        monkeypatch.setattr(background, "DeliveryRouter", lambda *_: delivery)
         return transport, lambda: asyncio.run(bg.run_round(followup_only=True))
 
     return store, setup

@@ -175,7 +175,7 @@ def test_terminal_email_failure_does_not_block_model_or_repeat_accepted_delivery
     )
     monkeypatch.setattr("gpuops.background.SshWorkerTransport", lambda **_: transport)
     delivery = Mock(send=Mock(return_value=subprocess.CompletedProcess([], 0, "accepted", "")))
-    monkeypatch.setattr("gpuops.background.DeliveryRouter", lambda _: delivery)
+    monkeypatch.setattr("gpuops.background.DeliveryRouter", lambda *_: delivery)
     email = Mock(side_effect=[OSError("offline"), None])
     monkeypatch.setattr("gpuops.followup_delivery.send_mail", email)
     client("check")

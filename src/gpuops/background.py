@@ -24,7 +24,7 @@ from gpuops.cli_errors import CommandError, error_payload, print_error
 from gpuops.config import select_targets
 from gpuops.control import RemoteTarget
 from gpuops.file_io import atomic_write_bytes
-from gpuops.followup_delivery import DeliveryRouter, load_adapters
+from gpuops.followup_delivery import AdapterSettings, DeliveryRouter, load_adapters
 from gpuops.followup_groups import (
     GroupStore,
     apply_group_observations,
@@ -72,8 +72,8 @@ def _write_json(path: Path, value: dict[str, Any]) -> None:
     atomic_write_bytes(path, json.dumps(value, ensure_ascii=False, indent=2).encode())
 
 
-def _retryable_harnesses() -> set[str]:
-    return {name for name, settings in load_adapters().items() if settings.idempotent}
+def _retryable_harnesses(adapters: dict[str, AdapterSettings]) -> set[str]:
+    return {name for name, settings in adapters.items() if settings.idempotent}
 
 
 @dataclass
@@ -256,7 +256,7 @@ class Background:
     def pending(events: FollowupStore, groups: GroupStore) -> dict[str, int]:
         records = events.list()
         retryable = (
-            _retryable_harnesses()
+            _retryable_harnesses(load_adapters())
             if any(
                 row.status == "delivery_unknown" and row.harness != "codex-desktop"
                 for row in records
@@ -356,12 +356,12 @@ class Background:
             except Exception as error:
                 run.error("alerts", error)
 
-        retryable: set[str] = set()
         if switches.followups:
             try:
-                retryable = _retryable_harnesses()
+                adapters = load_adapters()
             except (OSError, ValueError) as error:
                 run.error("followups", error)
+                adapters = {}
             try:
                 try:
                     settings = json.loads((self.followup_root / "codex.json").read_bytes())
@@ -371,7 +371,12 @@ class Background:
                 except (OSError, ValueError, TypeError) as error:
                     run.error("followups", error)
                     queue = None
-                deliver_followups(events, DeliveryRouter(queue), self.followups_enabled, retryable)
+                deliver_followups(
+                    events,
+                    DeliveryRouter(queue, adapters),
+                    self.followups_enabled,
+                    _retryable_harnesses(adapters),
+                )
             except Exception as error:
                 run.error("followups", error)
 

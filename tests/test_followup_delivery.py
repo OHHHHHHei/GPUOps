@@ -15,6 +15,7 @@ from gpuops.followup_delivery import (
     adapter_capabilities,
     configure_adapter,
     configure_email,
+    load_adapters,
     read_email_settings,
     send_followup_email,
 )
@@ -82,7 +83,7 @@ def test_adapter_ack_contract_and_duplicate_event_id(tmp_path, monkeypatch, foll
         return subprocess.CompletedProcess(command, 0, json.dumps(response), "")
 
     monkeypatch.setattr(subprocess, "run", run)
-    router = DeliveryRouter(None)
+    router = DeliveryRouter(None, load_adapters())
 
     first = router.send(followup)
     second = router.send(followup)
@@ -131,7 +132,7 @@ def test_adapter_ack_contract_and_duplicate_event_id(tmp_path, monkeypatch, foll
 
 def test_adapter_rejection_and_uncertain_delivery(tmp_path, monkeypatch, followup):
     _install_adapter(tmp_path, monkeypatch)
-    router = DeliveryRouter(None)
+    router = DeliveryRouter(None, load_adapters())
 
     def result(payload, returncode=0):
         monkeypatch.setattr(

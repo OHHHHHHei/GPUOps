@@ -178,6 +178,36 @@ def test_enabling_adapter_retries_loads_an_idle_checker(app, capsys):
     transport.watch.assert_not_called()
 
 
+def test_uncertain_delivery_uses_one_adapter_configuration_per_round(app, monkeypatch):
+    bg, launchd, transport = app
+    settings = bg.home / "adapter.json"
+    settings.write_text(json.dumps({"command": ["/fake/old"], "idempotent": True}))
+    assert main(["followup", "adapter", "external", str(settings)]) == 0
+    for run_id in ("first", "second"):
+        row = event(bg, run_id, status="delivery_unknown")
+        row.harness = "external"
+        bg.event_store().save(row)
+    enable_followups(bg)
+    assert launchd.loaded
+
+    attempted = []
+
+    def deliver(command, **_):
+        attempted.append(command)
+        if len(attempted) == 1:
+            settings.write_text(json.dumps({"command": ["/fake/new"], "idempotent": False}))
+            assert main(["followup", "adapter", "external", str(settings)]) == 0
+        raise subprocess.TimeoutExpired(command, 30)
+
+    monkeypatch.setattr(followup_delivery.subprocess, "run", deliver)
+    stats = run(bg)
+    assert attempted == [["/fake/old"], ["/fake/old"]]
+    assert stats["pending"]["events"] == 0
+    assert not launchd.loaded
+    assert {row.status for row in bg.event_store().list()} == {"delivery_unknown"}
+    transport.watch.assert_not_called()
+
+
 def test_shared_watch_deduplicates_groups_and_uses_full_job_records(app, monkeypatch):
     bg, _, transport = app
     single = event(bg, "shared")
@@ -217,7 +247,7 @@ def test_shared_watch_deduplicates_groups_and_uses_full_job_records(app, monkeyp
 
     transport.watch.side_effect = watch
     send = Mock(return_value=subprocess.CompletedProcess([], 0, "receipt", ""))
-    monkeypatch.setattr(background, "DeliveryRouter", lambda _: Mock(send=send))
+    monkeypatch.setattr(background, "DeliveryRouter", lambda *_: Mock(send=send))
     stats = run(bg)
     assert (stats["ssh_calls"], stats["targets"], stats["jobs"]) == (2, 2, 4)
     assert stats["pending"] == {"waiting_jobs": 3, "events": 0, "emails": 0, "total": 3}
@@ -242,7 +272,7 @@ def test_running_worker_version_mismatch_does_not_discard_jobs(app, monkeypatch)
     enable_followups(bg)
     assert main(["alerts", "enable"]) == 0
     send = Mock(return_value=subprocess.CompletedProcess([], 0, "receipt", ""))
-    monkeypatch.setattr(background, "DeliveryRouter", lambda _: Mock(send=send))
+    monkeypatch.setattr(background, "DeliveryRouter", lambda *_: Mock(send=send))
 
     def watch(target, ids):
         if not ids:
@@ -348,7 +378,7 @@ def test_sending_can_be_confirmed_and_only_one_round_makes_claim(
         return subprocess.CompletedProcess([], code, "receipt", "rejected")
 
     sender = Mock(side_effect=send)
-    monkeypatch.setattr(background, "DeliveryRouter", lambda _: Mock(send=sender))
+    monkeypatch.setattr(background, "DeliveryRouter", lambda *_: Mock(send=sender))
     first, second = sorted([row, waiting], key=lambda record: record.id)
     store = bg.event_store()
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -500,7 +530,7 @@ def test_feature_error_does_not_block_other_feature_or_stats(app, monkeypatch, b
         ready=False,
     )
     send = Mock(return_value=subprocess.CompletedProcess([], 0, "receipt", ""))
-    monkeypatch.setattr(background, "DeliveryRouter", lambda _: Mock(send=send))
+    monkeypatch.setattr(background, "DeliveryRouter", lambda *_: Mock(send=send))
     error = Mock(side_effect=OSError(f"{broken} failed"))
     if broken == "alerts":
         monkeypatch.setattr(alerts, "process_observations", error)

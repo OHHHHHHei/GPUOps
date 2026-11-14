@@ -248,8 +248,9 @@ def _adapter_request(followup: Followup) -> dict[str, Any]:
 
 
 class DeliveryRouter:
-    def __init__(self, codex: CodexQueue | None):
+    def __init__(self, codex: CodexQueue | None, adapters: dict[str, AdapterSettings]):
         self.codex = codex
+        self.adapters = adapters
 
     def send(self, followup: Followup) -> subprocess.CompletedProcess[str]:
         if followup.harness == "codex-desktop":
@@ -257,7 +258,7 @@ class DeliveryRouter:
                 raise OSError("Codex desktop delivery is not available")
             return self.codex.send(followup)
 
-        settings = load_adapters().get(followup.harness)
+        settings = self.adapters.get(followup.harness)
         if settings is None:
             raise OSError(f"follow-up adapter is not configured: {followup.harness}")
         request = json.dumps(_adapter_request(followup), ensure_ascii=False, default=str) + "\n"
@@ -307,5 +308,5 @@ class DeliveryRouter:
     def can_retry_uncertain(self, followup: Followup) -> bool:
         if followup.harness == "codex-desktop":
             return False
-        settings = load_adapters().get(followup.harness)
+        settings = self.adapters.get(followup.harness)
         return settings.idempotent if settings is not None else False

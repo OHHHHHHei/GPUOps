@@ -18,7 +18,8 @@ def client(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("CODEX_THREAD_ID", "00000000-0000-4000-8000-000000000001")
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("gpuops.followup_commands.enable", Mock())
+    monkeypatch.setattr("gpuops.followup_commands.prepare_delivery", Mock())
+    monkeypatch.setattr("gpuops.background._launchctl", Mock(return_value=False))
     smtp = tmp_path / "smtp.json"
     smtp.write_text(
         json.dumps(
@@ -85,17 +86,24 @@ print(json.dumps({"api_version": "gpuops.delivery/v1", "event_id": event["event_
     registered = client("register", str(request))
     assert client("register", str(request))["id"] == registered["id"]
     event_id = registered["events"][0]["id"]
-    get_job = AsyncMock(
-        side_effect=[
-            job("a", JobStatus.SUCCEEDED),
-            job("b", JobStatus.QUEUED),
-            job("c", JobStatus.CANCELLED),
-            job("b", JobStatus.FAILED),
-        ]
-    )
-    monkeypatch.setattr(
-        "gpuops.followup_commands.SshWorkerTransport", lambda **_: Mock(get_job=get_job)
-    )
+    remaining = {
+        "a": iter([JobStatus.SUCCEEDED]),
+        "b": iter([JobStatus.QUEUED, JobStatus.FAILED]),
+        "c": iter([JobStatus.CANCELLED]),
+    }
+
+    async def batch(target, ids):
+        return {
+            "server_id": target.server_id,
+            "worker": {},
+            "jobs": {
+                run_id: job(run_id, next(remaining[run_id])).model_dump(mode="json")
+                for run_id in ids
+            },
+        }
+
+    watch = AsyncMock(side_effect=batch)
+    monkeypatch.setattr("gpuops.background.SshWorkerTransport", lambda **_: Mock(watch=watch))
     email = Mock(side_effect=[OSError("SMTP offline"), None])
     monkeypatch.setattr("gpuops.followup_delivery.send_mail", email)
 
@@ -135,7 +143,7 @@ print(json.dumps({"api_version": "gpuops.delivery/v1", "event_id": event["event_
     client("check")
     assert client("show", event_id)["email_sent_at"] is not None
     assert client("show", registered["id"])["status"] == "analysis_complete"
-    assert get_job.await_count == 4 and email.call_count == 2
+    assert watch.await_count == 3 and email.call_count == 2
     assert "A succeeded; B failed; C cancelled." in email.call_args.args[1].get_content()
 
 
@@ -156,10 +164,18 @@ def test_terminal_email_failure_does_not_block_model_or_repeat_accepted_delivery
     )
     group = client("register", str(request))
     event_id = group["events"][0]["id"]
-    transport = Mock(get_job=AsyncMock(return_value=job("a", JobStatus.SUCCEEDED)))
-    monkeypatch.setattr("gpuops.followup_commands.SshWorkerTransport", lambda **_: transport)
+    transport = Mock(
+        watch=AsyncMock(
+            return_value={
+                "server_id": "gpu01",
+                "worker": {},
+                "jobs": {"a": job("a", JobStatus.SUCCEEDED).model_dump(mode="json")},
+            }
+        )
+    )
+    monkeypatch.setattr("gpuops.background.SshWorkerTransport", lambda **_: transport)
     delivery = Mock(send=Mock(return_value=subprocess.CompletedProcess([], 0, "accepted", "")))
-    monkeypatch.setattr("gpuops.followup_delivery.DeliveryRouter", lambda _: delivery)
+    monkeypatch.setattr("gpuops.background.DeliveryRouter", lambda *_: delivery)
     email = Mock(side_effect=[OSError("offline"), None])
     monkeypatch.setattr("gpuops.followup_delivery.send_mail", email)
     client("check")
@@ -182,6 +198,6 @@ def test_terminal_email_failure_does_not_block_model_or_repeat_accepted_delivery
         client("check")
         assert email.call_count == 1
         assert client("show", event_id)["status"] == "stopped"
-    assert transport.get_job.await_count == 1
+    assert transport.watch.await_count == 1
     store = FollowupStore(tmp_path / ".local/state/gpuops/followups/records")
     assert len(store.list()) == 1

@@ -17,6 +17,10 @@ for tested behavior and limits.
   upgrade](docs/UPGRADE_0_4.md) converts saved records and fills in explicit
   result fields and single-job follow-up outcomes.
 
+- Add lightweight `watch` batches and share one on-demand macOS checker between
+  Worker alerts and follow-ups. Expose independent switches and last-round
+  statistics; network delivery no longer holds the follow-up record lock.
+
 - Add optional email to macOS Worker stop/recovery alerts. Reuse an SMTP settings
   file with `gpuops alerts enable --email-config`; desktop and email delivery
   retry independently. No changes to experiment manifests or remote Workers.

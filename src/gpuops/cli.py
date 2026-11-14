@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import subprocess
 import sys
 from collections.abc import Sequence
 from dataclasses import asdict
@@ -182,7 +183,7 @@ def build_parser() -> argparse.ArgumentParser:
     alerts.add_argument(
         "alerts_command",
         metavar="{enable,disable,status,test}",
-        choices=["enable", "disable", "status", "test", "_check"],
+        choices=["enable", "disable", "status", "test"],
     )
     alerts.add_argument("--json", action="store_true", dest="as_json")
     email = alerts.add_mutually_exclusive_group()
@@ -190,6 +191,10 @@ def build_parser() -> argparse.ArgumentParser:
     email.add_argument(
         "--no-email", action="store_true", help="with enable: use desktop alerts only"
     )
+
+    background = subparsers.add_parser("background", help="inspect the macOS background checker")
+    background.add_argument("background_command", metavar="status", choices=["status", "_run"])
+    background.add_argument("--json", action="store_true", dest="as_json")
 
     notify = subparsers.add_parser("notify", help="manage server-side job email notifications")
     notification_commands = notify.add_subparsers(dest="notify_action", required=True)
@@ -247,6 +252,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         from gpuops.notifications.commands import run_notification_command
 
         return asyncio.run(run_notification_command(args))
+    if args.command == "background":
+        from gpuops.background import run_command
+
+        return run_command(args)
     if args.command == "alerts":
         from gpuops.alerts import run_alerts
 
@@ -257,7 +266,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 email_config=args.email_config,
                 no_email=args.no_email,
             )
-        except (OSError, RuntimeError, ValueError) as error:
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
             print_error(error_payload(error), as_json=args.as_json)
             return 1
     if args.command == "worker":

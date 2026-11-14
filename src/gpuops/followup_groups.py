@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
+from collections.abc import Callable, Iterator
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -10,11 +10,19 @@ from uuid import UUID, uuid4
 
 from pydantic import Field, model_validator
 
+from gpuops.contracts import RunId
 from gpuops.control import RemoteTarget
 from gpuops.file_io import atomic_write_bytes
-from gpuops.followups import Followup, FollowupStore, completion_message, job_outcome
+from gpuops.followups import (
+    Followup,
+    FollowupStore,
+    JobKey,
+    JobObservations,
+    completion_message,
+    job_key,
+    job_outcome,
+)
 from gpuops.models import JobRecord, StrictModel, utc_now
-from gpuops.transport import SshWorkerTransport
 
 GroupMode = Literal["per_job", "all_terminal"]
 NotifyMode = Literal["none", "terminal", "analysis_complete"]
@@ -23,7 +31,7 @@ NotifyMode = Literal["none", "terminal", "analysis_complete"]
 class RemoteJob(StrictModel):
     """A group member and its latest durable observation."""
 
-    run_id: str
+    run_id: RunId
     server_id: str
     ssh_host: str
     job: JobRecord | None = None
@@ -33,8 +41,6 @@ class RemoteJob(StrictModel):
     @model_validator(mode="after")
     def member_invariants(self) -> RemoteJob:
         RemoteTarget(self.server_id, self.ssh_host)
-        if not self.run_id.strip():
-            raise ValueError("run_id cannot be empty")
         if self.job is not None and str(self.job.run_id) != self.run_id:
             raise ValueError("observed job does not match the member run_id")
         if self.event_id is not None:
@@ -170,6 +176,7 @@ def create_group(
     resume: bool = True,
     context: dict[str, str] | None = None,
     name: str | None = None,
+    on_registered: Callable[[], None] | None = None,
 ) -> GroupRecord:
     """Register a durable group and preallocate stable event IDs."""
     clean_members = [
@@ -209,8 +216,12 @@ def create_group(
                     "this follow-up group already exists with different settings: "
                     + ", ".join(differences)
                 )
-            return existing
-        store.save(candidate)
+            candidate = existing
+            break
+        else:
+            store.save(candidate)
+        if on_registered is not None:
+            on_registered()
     return candidate
 
 
@@ -258,63 +269,74 @@ def _create_event(
     events.save(event)
 
 
-async def _observe_member(member: RemoteJob, transport: SshWorkerTransport) -> bool:
-    if member.job is not None and member.job.status.terminal:
-        return False
-    try:
-        job = await transport.get_job(
-            RemoteTarget(member.server_id, member.ssh_host), member.run_id
-        )
-        if job is None:
-            raise ValueError("registered job was not found on its original server")
-        member.job = job
-        member.error = None
-        return job.status.terminal
-    except (OSError, RuntimeError, ValueError) as error:
-        member.error = str(error)
-        return False
+def _pending_members(group: GroupRecord, events: FollowupStore) -> list[RemoteJob]:
+    if group.stopped or (
+        group.mode == "all_terminal"
+        and group.event_id is not None
+        and _event_exists(events, group.event_id)
+    ):
+        return []
+    return [
+        member for member in group.members if member.job is None or not member.job.status.terminal
+    ]
 
 
-async def check_groups(
-    groups: GroupStore,
-    events: FollowupStore,
-    transport: SshWorkerTransport,
+def pending_group_jobs(records: list[GroupRecord], events: FollowupStore) -> Iterator[JobKey]:
+    for group in records:
+        for member in _pending_members(group, events):
+            yield job_key(member.server_id, member.ssh_host, member.run_id)
+
+
+def pending_group_events(records: list[GroupRecord], events: FollowupStore) -> int:
+    """Account for a round interrupted between saving a group and creating its events."""
+    pending = 0
+    for group in records:
+        if group.stopped:
+            continue
+        if group.mode == "all_terminal":
+            assert group.event_id is not None
+            pending += int(_all_terminal(group) and not _event_exists(events, group.event_id))
+        else:
+            for member in group.members:
+                assert member.event_id is not None
+                pending += int(
+                    member.job is not None
+                    and member.job.status.terminal
+                    and not _event_exists(events, member.event_id)
+                )
+    return pending
+
+
+def apply_group_observations(
+    groups: GroupStore, events: FollowupStore, observations: JobObservations
 ) -> None:
-    """Refresh nonterminal members and create each newly eligible event once."""
-    with events.lock():
-        for group in groups.list():
-            if group.stopped:
+    """Apply observations to current group records and create eligible events under the lock."""
+    for group in groups.list():
+        if group.stopped:
+            continue
+        changed = False
+        newly_terminal = []
+        for member in _pending_members(group, events):
+            result = observations.get(job_key(member.server_id, member.ssh_host, member.run_id))
+            if result is None:
                 continue
-            if (
-                group.mode == "all_terminal"
-                and group.event_id is not None
-                and _event_exists(events, group.event_id)
-            ):
-                continue
-            pending = [
-                member
-                for member in group.members
-                if member.job is None or not member.job.status.terminal
-            ]
-            observations = await asyncio.gather(
-                *(_observe_member(member, transport) for member in pending)
-            )
-            newly_terminal = [
-                member
-                for member, became_terminal in zip(pending, observations, strict=True)
-                if became_terminal
-            ]
-            if pending:
-                groups.save(group)
-            if group.mode == "per_job":
-                for member in group.members:
-                    if member.job is None or not member.job.status.terminal:
-                        continue
-                    assert member.event_id is not None
-                    _create_event(group, events, member, member.event_id)
-                continue
-            if group.mode != "all_terminal" or not _all_terminal(group):
-                continue
+            changed = True
+            if isinstance(result, str):
+                member.error = result
+            else:
+                member.job = result
+                member.error = None
+                if result.status.terminal:
+                    newly_terminal.append(member)
+        if changed:
+            groups.save(group)
+        if group.mode == "per_job":
+            for member in group.members:
+                if member.job is None or not member.job.status.terminal:
+                    continue
+                assert member.event_id is not None
+                _create_event(group, events, member, member.event_id)
+        elif _all_terminal(group):
             assert group.event_id is not None
             trigger = newly_terminal[-1] if newly_terminal else group.members[-1]
             _create_event(group, events, trigger, group.event_id)

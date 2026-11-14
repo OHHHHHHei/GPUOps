@@ -6,17 +6,49 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from gpuops import followup_commands
+from gpuops import background, followup_commands
 from gpuops.cli import main
 from gpuops.followups import (
     CodexQueue,
     Followup,
     FollowupStore,
-    check_followups,
     completion_message,
     job_outcome,
 )
 from gpuops.models import JobRecord, JobSpec, JobStatus, utc_now
+
+
+@pytest.fixture(autouse=True)
+def local_only(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(background, "_launchctl", Mock(return_value=False))
+
+
+@pytest.fixture
+def checker(monkeypatch):
+    bg = background.Background()
+    store = bg.event_store()
+    with store.lock():
+        bg.set_switch_locked("followups", True)
+
+    def setup(delivery, responses):
+        def watch(target, ids):
+            assert ids == ["experiment-1"]
+            result = next(responses)
+            if isinstance(result, Exception):
+                raise result
+            return {
+                "server_id": target.server_id,
+                "worker": {},
+                "jobs": {ids[0]: result.model_dump(mode="json")},
+            }
+
+        transport = Mock(watch=AsyncMock(side_effect=watch))
+        monkeypatch.setattr(background, "SshWorkerTransport", lambda **_: transport)
+        monkeypatch.setattr(background, "DeliveryRouter", lambda *_: delivery)
+        return transport, lambda: asyncio.run(bg.run_round(followup_only=True))
+
+    return store, setup
 
 
 @pytest.fixture
@@ -46,17 +78,17 @@ def job(status):
 
 
 @pytest.mark.parametrize("terminal", [JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED])
-def test_completion_survives_offline_restart_and_is_delivered_once(tmp_path, followup, terminal):
-    store = FollowupStore(tmp_path / "records")
+def test_completion_survives_offline_restart_and_is_delivered_once(checker, followup, terminal):
+    store, setup = checker
     store.add(followup)
-    transport = Mock(
-        get_job=AsyncMock(side_effect=[OSError("offline"), job(JobStatus.QUEUED), job(terminal)])
-    )
     delivery = Mock(send=Mock(return_value=subprocess.CompletedProcess([], 0, "queue receipt", "")))
+    transport, check = setup(
+        delivery, iter([OSError("offline"), job(JobStatus.QUEUED), job(terminal)])
+    )
     for _ in range(4):
-        asyncio.run(check_followups(FollowupStore(store.directory), transport, delivery))
+        check()
     saved = store.get(followup.id)
-    assert transport.get_job.call_count == 3
+    assert transport.watch.call_count == 3
     assert delivery.send.call_count == 1
     assert saved.status == "queued" and saved.received_at is None
     assert saved.job.status == terminal and saved.error is None
@@ -75,12 +107,13 @@ def test_completion_survives_offline_restart_and_is_delivered_once(tmp_path, fol
     assert details["jobs"] == saved.outcomes and details["status"] == terminal.value
     assert followup.id in saved.message and followup.action in saved.message
     assert saved.receipt == "queue receipt"
+    assert saved.outcomes[0]["status"] == terminal.value
+    assert saved.outcomes[0]["project_workspace"] == followup.workspace
 
 
-def test_unavailable_cli_retries_persisted_message_without_requerying_job(tmp_path, followup):
-    store = FollowupStore(tmp_path / "records")
+def test_unavailable_cli_retries_persisted_message_without_requerying_job(checker, followup):
+    store, setup = checker
     store.add(followup)
-    transport = Mock(get_job=AsyncMock(return_value=job(JobStatus.SUCCEEDED)))
     delivery = Mock(
         send=Mock(
             side_effect=[
@@ -89,24 +122,25 @@ def test_unavailable_cli_retries_persisted_message_without_requerying_job(tmp_pa
             ]
         )
     )
-    asyncio.run(check_followups(store, transport, delivery))
+    transport, check = setup(delivery, iter([job(JobStatus.SUCCEEDED)]))
+    check()
     first = store.get(followup.id)
     assert first.status == "ready" and first.message is not None
-    asyncio.run(check_followups(store, transport, delivery))
+    check()
     assert store.get(followup.id).message == first.message
-    assert transport.get_job.call_count == 1 and delivery.send.call_count == 2
+    assert transport.watch.call_count == 1 and delivery.send.call_count == 2
 
 
 @pytest.mark.parametrize("interrupted", [False, True])
-def test_uncertain_delivery_does_not_blindly_repeat(tmp_path, followup, interrupted):
-    store = FollowupStore(tmp_path / "records")
+def test_uncertain_delivery_does_not_blindly_repeat(checker, followup, interrupted):
+    store, setup = checker
     if interrupted:
         followup.status = "sending"
     store.add(followup)
-    transport = Mock(get_job=AsyncMock(return_value=job(JobStatus.SUCCEEDED)))
     delivery = Mock(send=Mock(side_effect=subprocess.TimeoutExpired("codex", 30)))
+    _, check = setup(delivery, iter([job(JobStatus.SUCCEEDED)]))
     for _ in range(2):
-        asyncio.run(check_followups(store, transport, delivery))
+        check()
     assert store.get(followup.id).status == "delivery_unknown"
     assert delivery.send.call_count == (0 if interrupted else 1)
 
@@ -171,7 +205,7 @@ def test_cli_registration_uses_original_chat_and_journal(tmp_path, monkeypatch, 
     monkeypatch.setenv("CODEX_THREAD_ID", thread_id)
     monkeypatch.chdir(tmp_path)
     setup = Mock()
-    monkeypatch.setattr(followup_commands, "enable", setup)
+    monkeypatch.setattr(followup_commands, "prepare_delivery", setup)
     monkeypatch.setattr(
         followup_commands,
         "SubmissionJournal",
@@ -213,7 +247,7 @@ QUEUE_HELP = "Usage: codex queue [OPTIONS] --thread <THREAD> --message <TEXT>\n"
 
 
 @pytest.mark.parametrize("supported", [False, True])
-def test_enable_requires_the_queue_subcommand_help(tmp_path, monkeypatch, supported):
+def test_prepare_delivery_requires_the_queue_subcommand_help(tmp_path, monkeypatch, supported):
     # Unknown subcommands print Codex's top-level help and still exit 0.
     help_text = QUEUE_HELP if supported else TOP_LEVEL_HELP
     calls = []
@@ -228,29 +262,27 @@ def test_enable_requires_the_queue_subcommand_help(tmp_path, monkeypatch, suppor
     monkeypatch.setattr(followup_commands.sys, "platform", "darwin")
     monkeypatch.setattr(followup_commands.shutil, "which", lambda _name: "/tools/codex")
     monkeypatch.setattr(followup_commands.subprocess, "run", run)
-    plist = tmp_path / "Library/LaunchAgents" / f"{followup_commands.LABEL}.plist"
+    settings = tmp_path / "codex.json"
 
     if not supported:
         with pytest.raises(ValueError, match="does not support queue"):
-            followup_commands.enable(tmp_path)
-        assert calls == [["/tools/codex", "queue", "--help"]]
-        assert not plist.exists()
-        return
-    followup_commands.enable(tmp_path)
-    assert plist.exists()
-    assert calls[-1][:2] == ["launchctl", "bootstrap"]
+            followup_commands.prepare_delivery(tmp_path)
+        assert not settings.exists()
+    else:
+        followup_commands.prepare_delivery(tmp_path)
+        assert json.loads(settings.read_text())["executable"] == "/tools/codex"
+    assert calls == [["/tools/codex", "queue", "--help"]]
 
 
-def test_unreadable_record_does_not_block_other_followups(tmp_path, monkeypatch, capsys, followup):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    store = FollowupStore(tmp_path / ".local/state/gpuops/followups/records")
+def test_unreadable_record_does_not_block_other_followups(checker, capsys, followup):
+    store, setup = checker
     store.add(followup)
     unreadable = store.directory / "00000000-0000-4000-8000-0000000000ff.json"
     unreadable.write_text('{"unexpected": true}')
-    transport = Mock(get_job=AsyncMock(return_value=job(JobStatus.SUCCEEDED)))
     delivery = Mock(send=Mock(return_value=subprocess.CompletedProcess([], 0, "accepted", "")))
 
-    asyncio.run(check_followups(store, transport, delivery))
+    _, check = setup(delivery, iter([job(JobStatus.SUCCEEDED)]))
+    check()
 
     assert store.get(followup.id).status == "queued"
     assert main(["followup", "list", "--json"]) == 0
@@ -259,8 +291,8 @@ def test_unreadable_record_does_not_block_other_followups(tmp_path, monkeypatch,
     assert [row["path"] for row in listing["invalid_records"]] == [str(unreadable)]
 
 
-def test_stopped_followup_can_be_registered_again(tmp_path, followup):
-    store = FollowupStore(tmp_path / "records")
+def test_stopped_followup_can_be_registered_again_without_requerying_job(checker, followup):
+    store, setup = checker
     store.add(followup)
     # Stopped after the job finished, before delivery started.
     followup.status = "stopped"
@@ -272,12 +304,12 @@ def test_stopped_followup_can_be_registered_again(tmp_path, followup):
     again = store.add(followup.model_copy(update={"id": "another-id", "action": "New action"}))
 
     assert again.id == followup.id
-    assert again.status == "waiting" and again.action == "New action"
-    assert again.job is None and again.message is None
-    assert again.outcomes == []
-    transport = Mock(get_job=AsyncMock(return_value=job(JobStatus.SUCCEEDED)))
+    assert again.status == "ready" and again.action == "New action"
+    assert again.job == followup.job
     delivery = Mock(send=Mock(return_value=subprocess.CompletedProcess([], 0, "accepted", "")))
-    asyncio.run(check_followups(store, transport, delivery))
+    transport, check = setup(delivery, iter(()))
+    check()
+    transport.watch.assert_not_called()
     saved = store.get(followup.id)
     assert saved.status == "queued" and "New action" in saved.message
 
@@ -294,10 +326,17 @@ def test_failed_email_backs_off_exponentially_up_to_one_hour(tmp_path, monkeypat
         logins.append(now)
         raise OSError("535 authentication failed")
 
+    followup.status = "observed"
+    followup.job = job(JobStatus.SUCCEEDED)
+    followup.notify = "terminal"
+    store.add(followup)
     delays = []
     for _ in range(9):
-        module._deliver_email(store, followup, sender)
-        module._deliver_email(store, followup, sender)  # inside the delay: no new login
+        module._deliver_email(store, followup.id, sender, lambda: True)
+        module._deliver_email(
+            store, followup.id, sender, lambda: True
+        )  # inside the delay: no new login
+        followup = store.get(followup.id)
         delays.append((followup.email_next_attempt_at - now).total_seconds() / 60)
         now = followup.email_next_attempt_at
 

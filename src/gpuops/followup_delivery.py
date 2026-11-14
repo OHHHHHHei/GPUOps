@@ -269,6 +269,7 @@ class DeliveryRouter:
                 cwd=followup.workspace,
                 capture_output=True,
                 text=True,
+                errors="replace",
                 timeout=ADAPTER_TIMEOUT_SECONDS,
                 shell=False,
             )

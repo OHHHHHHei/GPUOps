@@ -271,6 +271,7 @@ class CodexQueue:
             },
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=30,
         )
 
@@ -358,6 +359,7 @@ def deliver_followups(
     delivery: CompletionDelivery,
     enabled: Callable[[], bool],
     retryable: set[str],
+    report: Callable[[str, Exception], None] | None = None,
 ) -> None:
     from gpuops.followup_delivery import send_followup_email
 
@@ -365,9 +367,19 @@ def deliver_followups(
         if not enabled():
             return
         ids = [followup.id for followup in store.list()]
+
+    def isolated(followup_id: str, step: Callable[..., None], *args: Any) -> None:
+        # One broken event must not hold back the other deliveries and emails.
+        try:
+            step(store, followup_id, *args)
+        except Exception as error:
+            if report is None:
+                raise
+            report(followup_id, error)
+
     for followup_id in ids:
-        _deliver_event(store, followup_id, delivery, enabled, retryable)
-        _deliver_email(store, followup_id, send_followup_email, enabled)
+        isolated(followup_id, _deliver_event, delivery, enabled, retryable)
+        isolated(followup_id, _deliver_email, send_followup_email, enabled)
 
 
 def _deliver_event(
@@ -377,8 +389,6 @@ def _deliver_event(
     enabled: Callable[[], bool],
     retryable: set[str],
 ) -> None:
-    from gpuops.followup_delivery import DeliveryUncertain
-
     with store.lock():
         if not enabled():
             return
@@ -398,16 +408,16 @@ def _deliver_event(
     status: Literal["ready", "queued", "delivery_unknown"] = "ready"
     try:
         result = delivery.send(followup)
-    except (OSError, ValueError) as error:
-        # The child could not start or its local configuration could not be read.
+    except OSError as error:
+        # The delivery command could not start, so nothing reached the Harness.
         error_message = str(error)
-    except (subprocess.TimeoutExpired, DeliveryUncertain) as error:
+    except subprocess.TimeoutExpired:
         status = "delivery_unknown"
-        error_message = (
-            "delivery timed out; acceptance is uncertain"
-            if isinstance(error, subprocess.TimeoutExpired)
-            else str(error)
-        )
+        error_message = "delivery timed out; acceptance is uncertain"
+    except Exception as error:
+        # Once the command may have run, a failure cannot prove the message was rejected.
+        status = "delivery_unknown"
+        error_message = str(error) or error.__class__.__name__
     else:
         if result.returncode == 0:
             status = "queued"

@@ -2,6 +2,7 @@ import asyncio
 import json
 import plistlib
 import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
 from unittest.mock import AsyncMock, Mock
@@ -541,3 +542,63 @@ def test_feature_error_does_not_block_other_feature_or_stats(app, monkeypatch, b
     assert bg.status()["last_round"]["errors"] == stats["errors"]
     assert bg.event_store().get(row.id).status == ("queued" if broken == "alerts" else "waiting")
     assert alerts._notify.call_count == (2 if broken == "followups" else 0)
+
+
+@pytest.mark.parametrize("failure", ["invalid_utf8_output", "decode_error"])
+def test_failure_after_adapter_started_is_never_resent(app, monkeypatch, failure):
+    bg, _, transport = app
+    spool = bg.home / "spool"
+    spool.mkdir()
+    adapter = bg.home / "adapter.py"
+    # The adapter accepts the event, then prints bytes that are not UTF-8.
+    adapter.write_text(
+        "import pathlib, sys, uuid\n"
+        f"pathlib.Path({str(spool)!r}, uuid.uuid4().hex).touch()\n"
+        "sys.stdout.buffer.write(b'\\xff\\xfe accepted')\n"
+    )
+    settings = bg.home / "adapter.json"
+    settings.write_text(json.dumps({"command": [sys.executable, str(adapter)]}))
+    assert main(["followup", "adapter", "external", str(settings)]) == 0
+    row = event(bg, "accepted", status="ready")
+    row.harness = "external"
+    bg.event_store().save(row)
+    enable_followups(bg)
+    if failure == "decode_error":
+        real_run = followup_delivery.subprocess.run
+
+        def run_then_fail_decoding(*args, **kwargs):
+            real_run(*args, **kwargs)
+            raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+        monkeypatch.setattr(followup_delivery.subprocess, "run", run_then_fail_decoding)
+
+    run(bg)
+    run(bg)
+
+    assert len(list(spool.iterdir())) == 1
+    assert bg.event_store().get(row.id).status == "delivery_unknown"
+    transport.watch.assert_not_called()
+
+
+def test_unexpected_error_in_one_event_does_not_stop_the_round(app, monkeypatch):
+    bg, _, transport = app
+    first = event(bg, "first", status="queued", notify="terminal")
+    second = event(bg, "second", status="queued", notify="terminal")
+    enable_followups(bg)
+    sent = []
+
+    def send(followup):
+        if followup.id == first.id:
+            raise KeyError("broken message template")
+        sent.append(followup.id)
+
+    monkeypatch.setattr(followup_delivery, "send_followup_email", send)
+
+    stats = run(bg)
+
+    assert sent == [second.id]
+    assert bg.event_store().get(second.id).email_sent_at is not None
+    assert [(row["scope"], row.get("followup_id")) for row in stats["errors"]] == [
+        ("followups", first.id)
+    ]
+    transport.watch.assert_not_called()

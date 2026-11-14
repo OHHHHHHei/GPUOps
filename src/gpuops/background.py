@@ -94,6 +94,7 @@ class Round:
         *,
         target: RemoteTarget | None = None,
         run_id: str | None = None,
+        followup_id: str | None = None,
     ) -> None:
         row = {"scope": scope, **error_payload(error)}
         row.pop("ok", None)
@@ -101,6 +102,8 @@ class Round:
             row.update(server_id=target.server_id, ssh_host=target.ssh_host)
         if run_id is not None:
             row["run_id"] = run_id
+        if followup_id is not None:
+            row["followup_id"] = followup_id
         self.errors.append(row)
 
     async def collect(
@@ -376,6 +379,9 @@ class Background:
                     DeliveryRouter(queue, adapters),
                     self.followups_enabled,
                     _retryable_harnesses(adapters),
+                    report=lambda followup_id, error: run.error(
+                        "followups", error, followup_id=followup_id
+                    ),
                 )
             except Exception as error:
                 run.error("followups", error)

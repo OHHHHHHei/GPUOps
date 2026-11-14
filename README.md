@@ -222,8 +222,9 @@ Harness continuation and human email (`none`, `terminal`, or
 the action and context; GPUOps owns observation and routing, not research
 interpretation.
 
-The one-job Codex loop has passed live acceptance; the new group and adapter
-paths are locally tested but not yet live-deployed. Codex automatic execution
+The one-job and cross-server all-terminal Codex loops passed live acceptance
+before this release. The 0.4 shared checker still needs live cutover acceptance;
+external adapters have local contract tests. Codex automatic execution
 still requires the exact original chat to be loaded in Desktop. A generic
 external adapter is only a JSON/receipt hook and does not claim native Claude
 Code or DeepSeek session support. See [follow-ups](docs/FOLLOWUPS.md) for the

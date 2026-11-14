@@ -13,11 +13,12 @@ observes execution results and carries that caller-provided material to the
 target; the original Agent remains responsible for reading saved evidence,
 performing the analysis, updating research records, and reporting findings.
 
-The earlier single-job Codex Desktop loop passed live acceptance on 2026-11-13:
-the loaded original chat started a new turn, read saved metrics over SSH, and
-reported its analysis. Cross-server groups, independent follow-up email, and the
-generic adapter contract are covered by local tests on the current feature
-branch, but have not received a new live deployment acceptance yet.
+The single-job Codex Desktop loop and a cross-server `all_terminal` group passed
+live acceptance on 2026-11-13–14, before this 0.4 change. The original loaded
+chat continued, read saved metrics, and reported its analysis; the user confirmed
+receiving the analysis-complete email. Per-job grouping was observed without
+starting additional model turns. External adapters have local contract tests.
+The new 0.4 shared background checker still needs live cutover acceptance.
 
 ## Register work
 

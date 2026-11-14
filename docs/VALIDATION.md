@@ -56,8 +56,8 @@ These checks cover a small CUDA workload on an existing server with retained
 history. They do not establish full-memory behavior, training throughput,
 server-reboot recovery, or compatibility with every NVIDIA driver. A new host
 needs the [remote acceptance procedure](ROADMAP.md#remote-acceptance-gate).
-Rollback to an older Worker that cannot read new persisted records remains
-subject to the existing compatibility check.
+For the 0.4 cutover, restore the original records before selecting an older
+Worker. Follow the [upgrade and restoration procedure](UPGRADE_0_4.md).
 
 ## 0.4.0 coordinated cutover
 
@@ -65,3 +65,11 @@ The source changes require a coordinated migration before deployment to existing
 installations. Local tests and PR CI are development checks; they do not establish
 that the live Mac or servers have been upgraded. Record real cutover acceptance
 separately, including restored-history reads and notification/session delivery.
+
+Development validation on 2026-11-14: the integrated changes passed 797 Python
+tests (3 platform skips), 35 Web polling tests, Ruff formatting/lint and mypy.
+The installed-distribution smoke passed for the release-baseline changes using
+both pip and uv. The migration converted and validated a disposable copy of
+476 actual Mac records; re-running changed no files and restoration reproduced
+the original bytes. The details and limits of that copy test are recorded in
+[the upgrade guide](UPGRADE_0_4.md#mac-data-copy-validation).

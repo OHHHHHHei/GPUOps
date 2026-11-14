@@ -12,7 +12,7 @@ from pydantic import Field, model_validator
 
 from gpuops.control import RemoteTarget
 from gpuops.file_io import atomic_write_bytes
-from gpuops.followups import Followup, FollowupStore, completion_message
+from gpuops.followups import Followup, FollowupStore, completion_message, job_outcome
 from gpuops.models import JobRecord, StrictModel, utc_now
 from gpuops.transport import SshWorkerTransport
 
@@ -222,18 +222,6 @@ def _event_exists(store: FollowupStore, event_id: str) -> bool:
     return _event_path(store, event_id).exists()
 
 
-def _outcome(member: RemoteJob) -> dict[str, Any]:
-    job = member.job
-    return {
-        "run_id": member.run_id,
-        "server_id": member.server_id,
-        "status": job.status.value if job is not None else None,
-        "exit_code": job.exit_code if job is not None else None,
-        "failure_reason": job.failure_reason if job is not None else None,
-        "remote_workspace": job.spec.working_directory if job is not None else None,
-    }
-
-
 def _all_terminal(group: GroupRecord) -> bool:
     return all(member.job is not None and member.job.status.terminal for member in group.members)
 
@@ -261,7 +249,7 @@ def _create_event(
         group_id=group.id,
         mode=group.mode,
         context=dict(group.context),
-        outcomes=[_outcome(item) for item in group.members],
+        outcomes=[job_outcome(item.server_id, item.run_id, item.job) for item in group.members],
         resume=group.resume,
         notify=group.notify,
     )
@@ -409,7 +397,7 @@ def summarize_group(record: GroupRecord, events: FollowupStore) -> dict[str, Any
         "completion_kind": "analysis" if record.resume else "observation",
         "members": [
             {
-                **_outcome(member),
+                **job_outcome(member.server_id, member.run_id, member.job),
                 "ssh_host": member.ssh_host,
                 "error": member.error,
                 "event_id": member.event_id,

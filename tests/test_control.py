@@ -153,13 +153,13 @@ def test_explicit_host_is_fixed_without_auto_inspection(tmp_path: Path) -> None:
     assert transport.submit_calls[0][:2] == ("gpu02", "fixed-run")
 
 
-def test_new_unsupported_tracking_is_rejected_before_remote_calls(tmp_path: Path) -> None:
+def test_new_unsupported_email_policy_is_rejected_before_remote_calls(tmp_path: Path) -> None:
     spec = manifest(host="gpu01")
-    spec.tracking.progress_adapter = "unimplemented"
+    spec.metadata["gpuops.email"] = "disabled"
     transport = FakeTransport({})
     control = client(tmp_path, transport)
 
-    with pytest.raises(ValueError, match="tracking.progress_adapter"):
+    with pytest.raises(ValueError, match="gpuops.email"):
         asyncio.run(control.submit(spec, run_id="unsupported"))
     assert transport.inspect_calls == transport.get_calls == transport.submit_calls == []
     assert control.journal.get("unsupported") is None
@@ -195,9 +195,8 @@ def test_single_target_auto_still_requires_a_ready_worker(tmp_path: Path) -> Non
     assert transport.inspect_calls == []
 
 
-def test_accepted_legacy_tracking_can_be_retried(tmp_path: Path) -> None:
+def test_accepted_submission_can_be_retried(tmp_path: Path) -> None:
     spec = manifest(host="gpu01")
-    spec.tracking.progress_adapter = "legacy"
     transport = FakeTransport({})
     control = client(tmp_path, transport)
     control.journal.create_pending(

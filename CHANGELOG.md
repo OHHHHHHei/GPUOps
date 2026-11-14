@@ -13,6 +13,10 @@ for tested behavior and limits.
 - Replace hidden host arguments with `submit --server` and `deploy --ssh-alias`;
   remove `queue --all`, and report `doctor.telemetry_ok`.
 
+- Remove the unused `tracking` field from `gpuops/v1` manifests. The [0.4
+  upgrade](docs/UPGRADE_0_4.md) converts saved records and fills in explicit
+  result fields and single-job follow-up outcomes.
+
 - Add optional email to macOS Worker stop/recovery alerts. Reuse an SMTP settings
   file with `gpuops alerts enable --email-config`; desktop and email delivery
   retry independently. No changes to experiment manifests or remote Workers.

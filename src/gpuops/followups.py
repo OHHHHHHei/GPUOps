@@ -121,6 +121,7 @@ class FollowupStore:
                                 "status": "waiting",
                                 "checked_at": None,
                                 "job": None,
+                                "outcomes": [],
                                 "message": None,
                                 "error": None,
                             }
@@ -159,6 +160,17 @@ class FollowupStore:
                     followup.summary = summary
                 self.save(followup)
             return followup
+
+
+def job_outcome(server_id: str, run_id: str, job: JobRecord | None) -> dict[str, Any]:
+    return {
+        "server_id": server_id,
+        "run_id": run_id,
+        "status": job.status.value if job is not None else None,
+        "exit_code": job.exit_code if job is not None else None,
+        "failure_reason": job.failure_reason if job is not None else None,
+        "remote_workspace": job.spec.working_directory if job is not None else None,
+    }
 
 
 def completion_message(followup: Followup) -> str:
@@ -268,6 +280,12 @@ async def check_followups(
                     followup.error = None
                     if job.status.terminal:
                         followup.job = job
+                        followup.outcomes = [
+                            {
+                                **job_outcome(followup.server_id, job.run_id, job),
+                                "project_workspace": followup.workspace,
+                            }
+                        ]
                         followup.message = completion_message(followup)
                         followup.status = "ready"
                 except (OSError, RuntimeError, ValueError) as error:

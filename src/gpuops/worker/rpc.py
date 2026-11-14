@@ -37,6 +37,7 @@ from gpuops.worker.runtime import RuntimePaths, WorkerProcessStatus, inspect_wor
 from gpuops.worker.sampling import CachedGpuProbe
 
 RPC_API_VERSION = "gpuops.worker.rpc/v1"
+MAX_WATCH_JOBS = 500
 DEFAULT_TOTAL_BUDGET_BYTES = STATE_BUDGET_BYTES
 DEFAULT_LOG_BUDGET_BYTES = LOG_BUDGET_BYTES
 DEFAULT_LOG_TAIL_BYTES = 64 * 1024
@@ -94,7 +95,7 @@ class WorkerUnavailable(WorkerRpcError):
 class WorkerRpc:
     """Parse and dispatch a deliberately small, versioned JSON request surface."""
 
-    _METHODS = frozenset({"submit", "list", "show", "logs", "health", "cancel", "history"})
+    _METHODS = frozenset({"submit", "list", "show", "logs", "health", "cancel", "history", "watch"})
 
     def __init__(
         self,
@@ -387,6 +388,39 @@ class WorkerRpc:
             "modified_at": modified_at,
             "sampled_at": sampled_at,
             "utc_offset_seconds": utc_offset.total_seconds(),
+        }
+
+    def watch(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        """Read process health and selected records without sampling or storage scans."""
+
+        self._validate_param_keys(params, required={"run_ids"})
+        values = params["run_ids"]
+        if not isinstance(values, list) or len(values) > MAX_WATCH_JOBS:
+            raise InvalidParams(f"run_ids must be a list of at most {MAX_WATCH_JOBS} IDs")
+        run_ids = list(dict.fromkeys(self._require_run_id(value) for value in values))
+        status = self.worker_inspector(RuntimePaths.from_state_directory(self.state_root))
+        readiness = worker_readiness(status, server_id=self.server_id, now=self.clock())
+        heartbeat = status.heartbeat or {}
+        jobs: dict[str, Any] = {}
+        for run_id in run_ids:
+            try:
+                jobs[run_id] = self._get_job(run_id).model_dump(mode="json")
+            except RpcJobNotFound:
+                jobs[run_id] = None
+            except (OSError, ValueError) as error:
+                jobs[run_id] = {"error": {"code": "job_read_failed", "message": str(error)}}
+        return {
+            "server_id": self.server_id,
+            "worker": {
+                "process": status.state.value,
+                "ready": readiness.ready,
+                "reason": readiness.reason,
+                "release": readiness.release,
+                "error_code": readiness.error_code,
+                "heartbeat_at": heartbeat.get("heartbeat_at"),
+                "last_tick_error": heartbeat.get("last_tick_error"),
+            },
+            "jobs": jobs,
         }
 
     def health(self, params: Mapping[str, Any]) -> dict[str, Any]:

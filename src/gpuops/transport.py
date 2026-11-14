@@ -216,6 +216,11 @@ class SshWorkerTransport:
             )
         return result
 
+    async def watch(self, target: RemoteTarget, run_ids: list[str]) -> dict[str, Any]:
+        """Fetch one host's Worker status and selected jobs in one request."""
+
+        return await self._rpc(target, "watch", {"run_ids": run_ids})
+
     async def health(self, target: RemoteTarget) -> dict[str, Any]:
         return await self._rpc(target, "health", {})
 

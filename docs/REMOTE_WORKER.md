@@ -274,7 +274,7 @@ accepted. A pending local journal entry is not proof of remote acceptance; use
 `gpuops reconcile --json`.
 
 The one-shot `gpuops remote --server-id ID` RPC accepts only the versioned fixed
-methods `health`, `submit`, `list`, `history`, `show`, `logs`, and `cancel`. It
+methods `health`, `watch`, `submit`, `list`, `history`, `show`, `logs`, and `cancel`. It
 reads JSON from stdin, writes one JSON response, and opens no listening socket.
 SSH and host-local transports use this same contract.
 
@@ -368,3 +368,20 @@ removes the local registry entry. It retains the remote installation, job
 history, queue records, and experiment assets. It does not drain the queue or
 wait for running jobs to finish; inspect `queue --server ID` and complete or
 cancel the work before removing the server.
+
+### Batch observation for the Mac background service
+
+`watch` accepts `{"run_ids": [...]}` with up to 500 IDs. An empty list observes
+only the Worker. It checks the Worker process and heartbeat once, then reads
+those task files directly, without GPU sampling, queue enumeration or storage
+usage scans. A stopped Worker still permits reading saved task records.
+
+The response contains `server_id`, `worker` (process, ready, reason, release,
+error_code, heartbeat_at, last_tick_error), and `jobs` keyed by run ID. Every
+found task is a complete JobRecord. Missing tasks are null; an unreadable task
+has an item-level `error` with code `job_read_failed`, leaving other results
+available. Invalid IDs or more than 500 IDs reject the whole request.
+
+`SshWorkerTransport.watch(target, run_ids)` makes one SSH request per batch.
+The caller splits larger lists. There is no fallback to individual `show`
+requests or `health`; all installations use the same published release.

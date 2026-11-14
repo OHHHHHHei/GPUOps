@@ -256,3 +256,12 @@ The Agent prepares code, runtime environments, data, and checkpoints before
 submission. GPUOps schedules the command already present on the selected server.
 Keep automatic GPU selection as the default, and use the resource scope the
 user has authorized. No additional per-GPU authorization step is required.
+
+## Background observation RPC
+
+The internal `watch` method is the read-only batch interface used by the Mac
+background checker. It returns Worker readiness and full records for at most
+500 requested run IDs in one SSH call. An empty list is allowed for Worker-only
+checks. Missing records are null; unreadable records carry an item-level error.
+Malformed run IDs reject the request. Worker readiness is reported separately
+from saved task state, so a stopped Worker does not hide completed tasks.

@@ -7,11 +7,10 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
-from pydantic import ValidationError, create_model
 
-from gpuops.control import ControlClient, RemoteTarget, SubmissionJournal
+from gpuops.control import RemoteTarget
 from gpuops.core.queue import ConcurrentUpdate, QueueStore
-from gpuops.models import JobRecord, JobSpec, JobStatus, LaunchInfo, StrictModel
+from gpuops.models import JobRecord, JobSpec, JobStatus, LaunchInfo
 from gpuops.ssh import SSHResult
 from gpuops.transport import SshWorkerTransport
 from gpuops.worker.service import Worker
@@ -25,17 +24,6 @@ from gpuops.worker.supervisor_records import (
 )
 
 NOW = datetime(2026, 10, 22, tzinfo=timezone.utc)
-RESULT_FIELDS = {"exit_code", "launch_error"}
-# Preserve the pre-result field set and its extra="forbid" validation.
-LegacyJobRecord = create_model(
-    "LegacyJobRecord",
-    __base__=StrictModel,
-    **{
-        name: (field.annotation, field)
-        for name, field in JobRecord.model_fields.items()
-        if name not in RESULT_FIELDS
-    },
-)
 
 
 def spec() -> JobSpec:
@@ -95,39 +83,6 @@ def finished_supervisor(tmp_path, record, exit_code, launch_error=None):
     return DurableJobSupervisor(tmp_path / "runs", proc_root=tmp_path / "missing-proc")
 
 
-def test_active_queue_files_remain_readable_by_strict_legacy_workers(tmp_path) -> None:
-    store = QueueStore(tmp_path)
-    record = store.enqueue(spec(), run_id="active", now=NOW)
-
-    def assert_legacy_readable():
-        payload = json.loads((store.jobs_directory / "active.json").read_text())
-        assert RESULT_FIELDS.isdisjoint(payload)
-        assert LegacyJobRecord.model_validate(payload).run_id == "active"
-
-    assert_legacy_readable()
-    record = store.lease(
-        record.run_id,
-        server_id="gpu01",
-        gpu_indices=[0],
-        worker_id="worker",
-        ttl=timedelta(minutes=5),
-        expected_revision=0,
-        now=NOW,
-    )
-    assert_legacy_readable()
-    record = store.transition(record.run_id, JobStatus.STARTING, now=NOW)
-    assert_legacy_readable()
-    record = store.transition(
-        record.run_id,
-        JobStatus.RUNNING,
-        launch=LaunchInfo(pid=43211, started_at=NOW),
-        now=NOW,
-    )
-    assert_legacy_readable()
-    store.request_cancel(record.run_id, now=NOW)
-    assert_legacy_readable()
-
-
 @pytest.mark.parametrize(
     ("status", "exit_code", "launch_error", "expected"),
     [
@@ -173,15 +128,6 @@ def test_worker_persists_observed_results_after_recovery_and_cancellation(
     assert store.request_cancel(record.run_id) == persisted
     if status == JobStatus.STARTING:
         assert tick.started == [record.run_id]
-    if exit_code is not None or launch_error is not None:
-        with pytest.raises(ValidationError, match="Extra inputs"):
-            LegacyJobRecord.model_validate_json(
-                (store.jobs_directory / f"{record.run_id}.json").read_text()
-            )
-    else:
-        LegacyJobRecord.model_validate_json(
-            (store.jobs_directory / f"{record.run_id}.json").read_text()
-        )
 
 
 def test_completion_race_retries_durable_result_without_relaunch(tmp_path, monkeypatch) -> None:
@@ -265,7 +211,7 @@ class RpcSsh:
         return SSHResult(host, 0, json.dumps(self.rpc.handle(request)), "", 0.01)
 
 
-def test_v1_wire_records_stay_legacy_compatible_while_show_exposes_results(tmp_path) -> None:
+def test_rpc_returns_complete_job_records(tmp_path) -> None:
     from gpuops.worker.rpc import WorkerRpc
 
     rpc = WorkerRpc(tmp_path, server_id="gpu01", readiness_probe=lambda: (True, "ready"))
@@ -284,8 +230,7 @@ def test_v1_wire_records_stay_legacy_compatible_while_show_exposes_results(tmp_p
         rpc.cancel({"run_id": record.run_id})["job"],
         rpc.list({})["jobs"][0],
     ):
-        assert RESULT_FIELDS.isdisjoint(payload)
-        assert LegacyJobRecord.model_validate(payload).status == JobStatus.FAILED
+        assert payload == failed.model_dump(mode="json")
 
     ssh = RpcSsh(rpc)
     transport = SshWorkerTransport(ssh=ssh)
@@ -299,64 +244,6 @@ def test_v1_wire_records_stay_legacy_compatible_while_show_exposes_results(tmp_p
     assert ssh.requests[1]["params"] == {"run_id": record.run_id}
     assert asyncio.run(transport.submit(target, record.run_id, spec())) == failed
     assert asyncio.run(transport.cancel(target, record.run_id)) == failed
-
-
-def test_new_client_reconciles_with_old_rpc_without_new_request_fields(tmp_path) -> None:
-    from gpuops.worker.rpc import RPC_API_VERSION
-
-    class LegacyRpc:
-        record = None
-
-        def handle(self, request):
-            assert request["api_version"] == RPC_API_VERSION == "gpuops.worker.rpc/v1"
-            method, params = request["method"], request["params"]
-            if method == "health":
-                assert params == {}
-                result = {"status": "ok", "durable": True, "worker": {"ready": True}}
-            elif method == "show":
-                assert set(params) == {"run_id"}
-                if self.record is None:
-                    return {
-                        "api_version": RPC_API_VERSION,
-                        "request_id": request["request_id"],
-                        "ok": False,
-                        "error": {"code": "job_not_found"},
-                    }
-                result = {"job": self.record}
-            else:
-                assert method == "submit"
-                assert set(params) == {"run_id", "job_spec"}
-                self.record = JobRecord(
-                    run_id=params["run_id"],
-                    spec=JobSpec.model_validate(params["job_spec"]),
-                ).model_dump(mode="json", exclude=RESULT_FIELDS)
-                # The old worker accepted the run, but its submit reply was lost.
-                raise TimeoutError("submit reply lost")
-            return {
-                "api_version": RPC_API_VERSION,
-                "request_id": request["request_id"],
-                "ok": True,
-                "result": result,
-            }
-
-    ssh = RpcSsh(LegacyRpc())
-    client = ControlClient(
-        [RemoteTarget("gpu01", "gpu01")],
-        SshWorkerTransport(ssh=ssh),
-        SubmissionJournal(tmp_path / "journal"),
-        clock=lambda: NOW,
-    )
-
-    submitted = asyncio.run(client.submit(spec(), run_id="old-worker-run"))
-    reconciled = asyncio.run(client.reconcile(submitted.run_id))
-
-    assert submitted.record.exit_code is None
-    assert submitted.record.launch_error is None
-    assert reconciled.record == submitted.record
-    assert sum(request["method"] == "submit" for request in ssh.requests) == 1
-    saved = json.loads((tmp_path / "journal" / "old-worker-run.json").read_text())
-    assert RESULT_FIELDS.isdisjoint(saved["remote_record"])
-    LegacyJobRecord.model_validate(saved["remote_record"])
 
 
 def test_old_terminal_record_keeps_unknown_results_null() -> None:

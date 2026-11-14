@@ -160,17 +160,10 @@ gpuops submit job.json --email off --json
 ```
 
 `--email default` clears the per-job override and uses the Worker's configured
-default policy. `--email off` requires an updated remote Worker whose health
-response advertises the
-`job_email_policy` capability. An older Worker is rejected before enqueue with
-`unsupported_option`; upgrade GPUOps on that server first. The flag affects
-only that submitted job and does not disable follow-up email.
-
-During a rolling upgrade, update every server eligible for automatic placement
-before using `--email off`. Placement intentionally does not search for this
-optional capability: if an older Worker is selected, submission is rejected
-even when another candidate is newer. Set an explicit `resources.host` when a
-specific upgraded Worker should receive the job.
+policy. `--email off` suppresses only that job's Worker email; follow-up mail
+remains independent. Controllers, server CLIs, and running Workers must use the
+same published release. A version mismatch requires upgrading the installation,
+without trying an older interface or selecting hosts by optional capabilities.
 
 ## Delivery, receipt, and analysis completion
 
@@ -178,7 +171,7 @@ Delivery acceptance and completed analysis are separate states:
 
 | Event state | Evidence |
 | --- | --- |
-| `waiting` | Registered legacy single-job event; no terminal result observed. |
+| `waiting` | Registered single-job event; no terminal result observed. |
 | `ready` | Completion event saved; delivery pending or retrying. |
 | `sending` | Adapter invocation in progress. |
 | `queued` | Codex queue or external adapter returned an acceptance receipt. |

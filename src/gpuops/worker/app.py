@@ -7,16 +7,21 @@ import os
 import socket
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
+from gpuops import __version__
 from gpuops.config import SchedulerSettings
 from gpuops.core.queue import QueueStore
 from gpuops.core.scheduler import Scheduler
 from gpuops.core.storage import StorageBudget
 from gpuops.models import utc_now
 from gpuops.notifications import JobNotifier
+from gpuops.version import release_mismatch_message
 from gpuops.worker.runtime import (
     RuntimePaths,
     WorkerHeartbeat,
@@ -42,38 +47,55 @@ WORKER_HEARTBEAT_MAX_AGE_SECONDS = 75.0
 WORKER_HEARTBEAT_FUTURE_SKEW_SECONDS = 5.0
 
 
+@dataclass(frozen=True)
+class WorkerReadiness:
+    ready: bool
+    reason: str
+    release: str | None = None
+    error_code: str | None = None
+
+
 def worker_readiness(
     status: WorkerProcessStatus,
     *,
     server_id: str | None = None,
     now: datetime | None = None,
     max_age_seconds: float = WORKER_HEARTBEAT_MAX_AGE_SECONDS,
-) -> tuple[bool, str]:
+) -> WorkerReadiness:
     """Validate that the PID identity and heartbeat describe one live worker."""
 
     if status.state != WorkerProcessState.RUNNING or status.identity is None:
-        return False, f"worker process is {status.state.value}"
+        return WorkerReadiness(False, f"worker process is {status.state.value}")
     if status.heartbeat is None:
-        return False, "worker heartbeat is missing"
+        return WorkerReadiness(False, "worker heartbeat is missing")
+    if status.heartbeat.get("pid") != status.identity.pid:
+        return WorkerReadiness(False, "worker heartbeat PID does not match the verified process")
+    if server_id is not None and status.heartbeat.get("server_id") != server_id:
+        return WorkerReadiness(False, "worker heartbeat belongs to a different server id")
+    release = status.release
+    if release != __version__:
+        heartbeat_server_id = str(status.heartbeat.get("server_id") or "SERVER_ID")
+        return WorkerReadiness(
+            False,
+            release_mismatch_message(__version__, release, server_id or heartbeat_server_id),
+            release,
+            "version_mismatch",
+        )
     try:
         heartbeat = WorkerHeartbeat.model_validate(status.heartbeat)
-    except Exception:
-        return False, "worker heartbeat is invalid"
-    if heartbeat.pid != status.identity.pid:
-        return False, "worker heartbeat PID does not match the verified process"
-    if server_id is not None and heartbeat.server_id != server_id:
-        return False, "worker heartbeat belongs to a different server id"
+    except ValidationError:
+        return WorkerReadiness(False, "worker heartbeat is invalid", release)
     if heartbeat.status != "running":
-        return False, f"worker heartbeat status is {heartbeat.status!r}"
+        return WorkerReadiness(False, f"worker heartbeat status is {heartbeat.status!r}", release)
     current = now or utc_now()
     if heartbeat.heartbeat_at.tzinfo is None or current.tzinfo is None:
-        return False, "worker heartbeat timestamp is not timezone-aware"
+        return WorkerReadiness(False, "worker heartbeat timestamp is not timezone-aware", release)
     age = (current - heartbeat.heartbeat_at).total_seconds()
     if age < -WORKER_HEARTBEAT_FUTURE_SKEW_SECONDS:
-        return False, "worker heartbeat is implausibly in the future"
+        return WorkerReadiness(False, "worker heartbeat is implausibly in the future", release)
     if age > max_age_seconds:
-        return False, f"worker heartbeat is stale ({age:.1f}s old)"
-    return True, "ready"
+        return WorkerReadiness(False, f"worker heartbeat is stale ({age:.1f}s old)", release)
+    return WorkerReadiness(True, "ready", release)
 
 
 def build_worker_runtime(
@@ -139,8 +161,8 @@ def start_worker(
     paths = RuntimePaths.from_state_directory(state)
     status = inspect_worker(paths)
     if status.state == WorkerProcessState.RUNNING:
-        ready, reason = worker_readiness(status, server_id=server_id)
-        if ready:
+        readiness = worker_readiness(status, server_id=server_id)
+        if readiness.ready:
             assert status.identity is not None
             return {"started": False, "status": status.state.value, "pid": status.identity.pid}
         request_worker_stop(paths)
@@ -150,7 +172,7 @@ def start_worker(
                 break
             time.sleep(0.05)
         else:
-            raise RuntimeError(f"cannot replace unhealthy worker: {reason}")
+            raise RuntimeError(f"cannot replace unhealthy worker: {readiness.reason}")
 
     storage = StorageBudget(
         state,
@@ -176,8 +198,7 @@ def start_worker(
     deadline = time.monotonic() + max(0.0, wait_seconds)
     while time.monotonic() < deadline:
         current = inspect_worker(paths)
-        ready, _reason = worker_readiness(current, server_id=server_id)
-        if ready:
+        if worker_readiness(current, server_id=server_id).ready:
             assert current.identity is not None
             return {"started": True, "status": "running", "pid": current.identity.pid}
         time.sleep(0.05)
@@ -197,11 +218,12 @@ def worker_status(*, state_directory: Path = DEFAULT_STATE_DIRECTORY) -> dict[st
         if status.heartbeat is not None and status.heartbeat.get("server_id")
         else None
     )
-    ready, reason = worker_readiness(status, server_id=heartbeat_server_id)
+    readiness = worker_readiness(status, server_id=heartbeat_server_id)
     return {
         "status": status.state.value,
-        "ready": ready,
-        "reason": reason,
+        "ready": readiness.ready,
+        "reason": readiness.reason,
+        "release": status.release,
         "identity": (
             {
                 "pid": status.identity.pid,

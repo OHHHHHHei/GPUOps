@@ -9,6 +9,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from pydantic import ValidationError
+
+from gpuops import __version__
 from gpuops.config import MONITOR_TIMEOUT_SECONDS
 from gpuops.control import DefinitiveRemoteSubmissionError, RemoteHostState, RemoteTarget
 from gpuops.core.resources import (
@@ -21,7 +24,6 @@ from gpuops.core.resources import (
 from gpuops.execution import HostClient
 from gpuops.models import (
     ACTIVE_JOB_STATUSES,
-    JOB_EMAIL_POLICY_KEY,
     JobRecord,
     JobSpec,
     JobStatus,
@@ -30,6 +32,7 @@ from gpuops.models import (
 )
 from gpuops.monitor.collector import RemoteCollector
 from gpuops.ssh import SSHClient
+from gpuops.version import release_mismatch_message
 from gpuops.worker.rpc import RPC_API_VERSION
 
 
@@ -65,7 +68,7 @@ _DEFINITIVE_SUBMISSION_REJECTION_CODES = frozenset(
         "invalid_params",
         "method_not_found",
         "run_id_conflict",
-        "unsupported_option",
+        "version_mismatch",
         "worker_unavailable",
     }
 )
@@ -102,15 +105,6 @@ class SshWorkerTransport:
         try:
             health = await self.health(target)
             self._require_ready_worker(health)
-            capabilities = health.get("capabilities")
-            supports_email_policy = (
-                isinstance(capabilities, dict) and capabilities.get("job_email_policy") is True
-            )
-            if spec.metadata.get(JOB_EMAIL_POLICY_KEY) == "off" and not supports_email_policy:
-                raise RemoteWorkerError(
-                    "unsupported_option",
-                    "remote worker does not support gpuops.email=off; upgrade GPUOps on the server",
-                )
             result = await self._rpc(
                 target,
                 "submit",
@@ -139,14 +133,9 @@ class SshWorkerTransport:
         except RemoteWorkerError as error:
             if error.code == "job_not_found":
                 return None
-            if error.code != "invalid_params":
-                raise
-            record = await self.get_job(target, run_id)
-            if record is None:
-                return None
-            return JobDetail(record, unknown_job_explanation(record))
+            raise
         record = _job_record(result, run_id)
-        return JobDetail(record, _explanation(result.get("explanation"), record))
+        return JobDetail(record, _explanation(result.get("explanation")))
 
     async def cancel(
         self,
@@ -170,25 +159,16 @@ class SshWorkerTransport:
             {} if statuses is None else {"statuses": sorted(status.value for status in statuses)}
         )
         result = await self._rpc(target, "list", params)
-        return [JobRecord.model_validate(value) for value in result.get("jobs", [])]
+        return [JobRecord.model_validate(value) for value in result["jobs"]]
 
     async def list_summaries(
         self, target: RemoteTarget, *, statuses: set[JobStatus]
     ) -> list[JobSummary]:
-        try:
-            result = await self._rpc(
-                target,
-                "list",
-                {"statuses": sorted(status.value for status in statuses), "summary": True},
-            )
-        except RemoteWorkerError as error:
-            if error.code != "invalid_params":
-                raise
-            # Older workers can still filter active jobs during a rolling upgrade.
-            return [
-                JobSummary.from_record(job)
-                for job in await self.list_jobs(target, statuses=statuses)
-            ]
+        result = await self._rpc(
+            target,
+            "list",
+            {"statuses": sorted(status.value for status in statuses), "summary": True},
+        )
         return [JobSummary.model_validate(value) for value in result["jobs"]]
 
     async def history(
@@ -217,11 +197,24 @@ class SshWorkerTransport:
         *,
         tail_bytes: int = 64 * 1024,
     ) -> dict[str, Any]:
-        return await self._rpc(
+        result = await self._rpc(
             target,
             "logs",
             {"run_id": run_id, "tail_bytes": tail_bytes},
         )
+        missing = {
+            "content",
+            "source",
+            "modified_at",
+            "sampled_at",
+            "utc_offset_seconds",
+            "truncated",
+        } - result.keys()
+        if missing:
+            raise RemoteWorkerError(
+                "protocol_error", f"worker logs response is missing: {', '.join(sorted(missing))}"
+            )
+        return result
 
     async def health(self, target: RemoteTarget) -> dict[str, Any]:
         return await self._rpc(target, "health", {})
@@ -236,7 +229,12 @@ class SshWorkerTransport:
             or worker.get("ready") is not True
         ):
             reason = worker.get("reason") or "background worker is not ready"
-            raise RemoteWorkerError("worker_unavailable", str(reason))
+            code = (
+                "version_mismatch"
+                if worker.get("error_code") == "version_mismatch"
+                else "worker_unavailable"
+            )
+            raise RemoteWorkerError(code, str(reason))
 
     async def worker_command(
         self,
@@ -247,6 +245,8 @@ class SshWorkerTransport:
             raise ValueError("unsupported worker action")
         command = ["~/.local/bin/gpuops", "worker", action]
         if action == "start":
+            # A stopped worker can start once the installed RPC release matches.
+            await self.health(target)
             command.extend(["--server-id", target.server_id])
         command.append("--json")
         result = await self.ssh.run_command(
@@ -268,6 +268,7 @@ class SshWorkerTransport:
     ) -> dict[str, Any]:
         request = {
             "api_version": RPC_API_VERSION,
+            "release": __version__,
             "request_id": uuid.uuid4().hex,
             "method": method,
             "params": params,
@@ -284,6 +285,16 @@ class SshWorkerTransport:
         response = _single_json(result.stdout)
         if response.get("api_version") != RPC_API_VERSION:
             raise RemoteWorkerError("protocol_error", "unexpected worker RPC version")
+        # The 0.3 Worker rejects unknown envelope fields before reading the request ID.
+        if (
+            "request_id" not in response
+            and response.get("ok") is False
+            and response.get("error")
+            == {"code": "invalid_envelope", "message": "unexpected envelope fields: release"}
+        ):
+            raise RemoteWorkerError(
+                "version_mismatch", release_mismatch_message(__version__, None, target.server_id)
+            )
         if response.get("request_id") != request["request_id"]:
             raise RemoteWorkerError("protocol_error", "worker response request_id mismatch")
         if response.get("ok") is not True:
@@ -315,26 +326,20 @@ def unknown_job_explanation(
 
 
 def _job_record(result: dict[str, Any], run_id: str) -> JobRecord:
-    payload = result["job"]
-    execution_result = result.get("execution_result")
-    if isinstance(payload, dict) and isinstance(execution_result, dict):
-        payload = {
-            **payload,
-            **{
-                key: execution_result[key]
-                for key in ("exit_code", "launch_error")
-                if key in execution_result
-            },
-        }
-    record = JobRecord.model_validate(payload)
+    try:
+        record = JobRecord.model_validate(result.get("job"))
+    except ValidationError as error:
+        raise RemoteWorkerError(
+            "protocol_error", "worker returned an invalid job record"
+        ) from error
     if record.run_id != run_id:
         raise RemoteWorkerError("protocol_error", "worker returned a different run_id")
     return record
 
 
-def _explanation(value: object, record: JobRecord) -> dict[str, Any]:
+def _explanation(value: object) -> dict[str, Any]:
     if not isinstance(value, dict):
-        return unknown_job_explanation(record)
+        raise RemoteWorkerError("protocol_error", "worker returned an invalid job explanation")
     required = {
         "waiting": bool,
         "code": str,
@@ -343,12 +348,12 @@ def _explanation(value: object, record: JobRecord) -> dict[str, Any]:
         "details": dict,
     }
     if any(not isinstance(value.get(key), expected) for key, expected in required.items()):
-        return unknown_job_explanation(record)
+        raise RemoteWorkerError("protocol_error", "worker returned an invalid job explanation")
     if any(not str(value[key]).strip() for key in ("code", "message", "observed_at")):
-        return unknown_job_explanation(record)
+        raise RemoteWorkerError("protocol_error", "worker returned an invalid job explanation")
     next_action = value.get("next_action")
     if next_action is not None and not isinstance(next_action, str):
-        return unknown_job_explanation(record)
+        raise RemoteWorkerError("protocol_error", "worker returned an invalid job explanation")
     explanation = {key: value[key] for key in required}
     if next_action:
         explanation["next_action"] = next_action

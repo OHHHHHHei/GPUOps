@@ -28,7 +28,7 @@ EPOCH_DURATION = re.compile(
 
 
 @dataclass
-class _LegacyEvidence:
+class _PlainLogEvidence:
     epochs: int | None
     total_steps: int | None
     epoch_points: list[tuple[int, float]]
@@ -101,15 +101,17 @@ def estimate(sample: dict, process: dict, path: str, *, now: float) -> dict:
         return unknown("日志早于当前进程，无法确认属于本次训练")
     if modified_at is not None and modified_at > sampled_at + 5:
         return unknown("日志时间异常")
-    evidence = _collect_legacy_evidence(content, sample, process)
+    evidence = _collect_plain_log_evidence(content, sample, process)
     if isinstance(evidence, str):
         return unknown(evidence)
-    return _estimate_legacy(
+    return _estimate_plain_log(
         evidence, path=path, modified_at=modified_at, sampled_at=sampled_at, now=now
     )
 
 
-def _collect_legacy_evidence(content: str, sample: dict, process: dict) -> _LegacyEvidence | str:
+def _collect_plain_log_evidence(
+    content: str, sample: dict, process: dict
+) -> _PlainLogEvidence | str:
     """Gather progress points, or return the reason this log cannot be used."""
     argv = process["argv"]
     epochs = _total(argv, content, "epoch")
@@ -173,7 +175,7 @@ def _collect_legacy_evidence(content: str, sample: dict, process: dict) -> _Lega
 
     if training_finished:
         return "日志显示训练已结束，进程可能仍在收尾"
-    return _LegacyEvidence(
+    return _PlainLogEvidence(
         epochs=epochs,
         total_steps=total_steps,
         epoch_points=epoch_points,
@@ -184,8 +186,8 @@ def _collect_legacy_evidence(content: str, sample: dict, process: dict) -> _Lega
     )
 
 
-def _estimate_legacy(
-    evidence: _LegacyEvidence,
+def _estimate_plain_log(
+    evidence: _PlainLogEvidence,
     *,
     path: str,
     modified_at: float | None,

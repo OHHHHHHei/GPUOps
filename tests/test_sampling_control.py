@@ -49,12 +49,10 @@ def test_slow_sample_does_not_block_control_or_grant_resources(tmp_path, monkeyp
     identity = ProcessIdentity(os.getpid(), 1, "test-boot")
     paths = RuntimePaths.from_state_directory(state)
 
-    def readiness():
-        return worker_readiness(
-            inspect_worker(paths, identity_reader=lambda pid: identity), server_id="gpu01"
-        )
+    def inspect(paths):
+        return inspect_worker(paths, identity_reader=lambda pid: identity)
 
-    rpc = WorkerRpc(state, server_id="gpu01", queue=queue, readiness_probe=readiness)
+    rpc = WorkerRpc(state, server_id="gpu01", queue=queue, worker_inspector=inspect)
     spec = JobSpec(
         id="control-canary",
         project="test",
@@ -99,7 +97,7 @@ def test_slow_sample_does_not_block_control_or_grant_resources(tmp_path, monkeyp
     children = []
 
     def between_ticks(_seconds):
-        assert readiness() == (True, "ready")
+        assert worker_readiness(inspect(paths), server_id="gpu01").ready
         assert len(sampler.processes) == 1 and sampler.processes[0].poll() is None
         children.append(sampler.processes[0])
         heartbeats.append(json.loads(paths.heartbeat_path.read_text())["iteration"])

@@ -131,7 +131,7 @@ def select_targets(server_ids: list[str] | None = None) -> tuple[ServerTarget, .
 
 
 def local_target() -> ServerTarget | None:
-    """Read host.json, filling older identities from the registry or server ID."""
+    """Read host.json, whose deployment-written identity omits the display label."""
     path = Path.home() / ".local/share/gpuops/host.json"
     try:
         identity = json.loads(path.read_text(encoding="utf-8"))

@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from gpuops.config import GPU_QUERY_TIMEOUT_SECONDS
+from gpuops import __version__
 from gpuops.worker.app import WORKER_HEARTBEAT_MAX_AGE_SECONDS, worker_readiness
 from gpuops.worker.probe import LocalGpuProbe
 from gpuops.worker.runtime import (
@@ -30,190 +30,6 @@ from gpuops.worker.runtime import (
 from gpuops.worker.service import Worker, WorkerTickResult
 
 NOW = datetime(2026, 9, 19, 10, 0, tzinfo=timezone.utc)
-
-
-def completed(command: list[str], stdout: str = "", stderr: str = "", code: int = 0):
-    return subprocess.CompletedProcess(command, code, stdout, stderr)
-
-
-def test_local_probe_prefers_gpustat_and_maps_resources() -> None:
-    calls: list[list[str]] = []
-    payload = {
-        "gpus": [
-            {
-                "index": 1,
-                "uuid": "GPU-B",
-                "memory.total": 24576,
-                "memory.used": 1234,
-                "utilization.gpu": 87,
-                "processes": [{"pid": 99}],
-            },
-            {
-                "index": 0,
-                "uuid": "GPU-A",
-                "memory.total": 24576,
-                "memory.used": 318,
-                "utilization.gpu": 0,
-                "processes": [],
-            },
-        ]
-    }
-
-    def runner(command, **kwargs):
-        calls.append(command)
-        assert kwargs["timeout"] == pytest.approx(GPU_QUERY_TIMEOUT_SECONDS, abs=0.01)
-        return completed(command, json.dumps(payload))
-
-    snapshot = LocalGpuProbe("gpu01", runner=runner, clock=lambda: NOW).snapshot()
-
-    assert calls == [["gpustat", "--json"]]
-    assert snapshot.healthy is True
-    assert [gpu.index for gpu in snapshot.gpus] == [0, 1]
-    assert snapshot.gpus[0].idle is True
-    assert snapshot.gpus[1].process_count == 1
-    assert snapshot.gpus[1].idle is False
-
-
-def test_local_probe_falls_back_to_nvidia_smi_and_fails_closed() -> None:
-    calls: list[list[str]] = []
-
-    def runner(command, **kwargs):
-        del kwargs
-        calls.append(command)
-        if command[0] == "gpustat":
-            raise FileNotFoundError("gpustat missing")
-        if "--query-gpu" in command[1]:
-            return completed(
-                command,
-                ("0, GPU-A, 24576, 318, 0\n1, GPU-B, 24576, 12300, 90\n2, GPU-C, 24576, 4096, 0\n"),
-            )
-        return completed(command, "GPU-B, 8123\n")
-
-    snapshot = LocalGpuProbe("gpu02", runner=runner, clock=lambda: NOW).snapshot()
-
-    assert len(calls) == 3
-    assert snapshot.healthy is True
-    assert snapshot.gpus[0].idle is True
-    assert snapshot.gpus[1].process_count == 1
-    assert snapshot.gpus[1].idle is False
-    assert snapshot.gpus[2].process_count == 0
-    assert snapshot.gpus[2].idle is False
-
-    def failing_runner(command, **kwargs):
-        del kwargs
-        return completed(command, stderr=f"{command[0]} failed", code=1)
-
-    failed = LocalGpuProbe("gpu02", runner=failing_runner, clock=lambda: NOW).snapshot()
-    assert failed.healthy is False
-    assert failed.gpus == []
-    assert "gpustat" in failed.error
-    assert "nvidia-smi" in failed.error
-
-
-def test_local_probe_shares_one_deadline_across_fallback_commands() -> None:
-    current = [0.0]
-    timeouts: list[float] = []
-
-    def runner(command, **kwargs):
-        timeouts.append(kwargs["timeout"])
-        if command[0] == "gpustat":
-            current[0] = 10.0
-            return completed(command, stderr="gpustat failed", code=1)
-        if "--query-gpu" in command[1]:
-            current[0] = 22.0
-            return completed(command, "0, GPU-A, 24576, 318, 0\n")
-        current[0] = 24.0
-        return completed(command, "")
-
-    snapshot = LocalGpuProbe(
-        "gpu01",
-        runner=runner,
-        clock=lambda: NOW,
-        monotonic_clock=lambda: current[0],
-        sample_timeout_seconds=25.0,
-    ).snapshot()
-
-    assert snapshot.healthy is True
-    assert timeouts == pytest.approx([25.0, 15.0, 3.0])
-
-
-def test_local_probe_rejects_over_budget_result_without_starting_fallback() -> None:
-    current = [0.0]
-    calls: list[list[str]] = []
-
-    def runner(command, **kwargs):
-        del kwargs
-        calls.append(command)
-        current[0] = 26.0
-        return completed(
-            command,
-            json.dumps(
-                {
-                    "gpus": [
-                        {
-                            "index": 0,
-                            "uuid": "GPU-A",
-                            "memory.total": 24576,
-                            "memory.used": 318,
-                            "utilization.gpu": 0,
-                            "processes": [],
-                        }
-                    ]
-                }
-            ),
-        )
-
-    snapshot = LocalGpuProbe(
-        "gpu01",
-        runner=runner,
-        clock=lambda: NOW,
-        monotonic_clock=lambda: current[0],
-        sample_timeout_seconds=25.0,
-    ).snapshot()
-
-    assert calls == [["gpustat", "--json"]]
-    assert snapshot.healthy is False
-    assert snapshot.gpus == []
-    assert "sampling deadline exhausted" in snapshot.error
-
-
-def test_local_probe_memory_idle_baseline_and_tolerance_are_configurable() -> None:
-    payload = {
-        "gpus": [
-            {
-                "index": 0,
-                "uuid": "GPU-A",
-                "memory.total": 24576,
-                "memory.used": 350,
-                "utilization.gpu": 0,
-                "processes": [],
-            },
-            {
-                "index": 1,
-                "uuid": "GPU-B",
-                "memory.total": 24576,
-                "memory.used": 351,
-                "utilization.gpu": 0,
-                "processes": [],
-            },
-        ]
-    }
-
-    def runner(command, **kwargs):
-        del kwargs
-        return completed(command, json.dumps(payload))
-
-    snapshot = LocalGpuProbe(
-        "gpu01",
-        runner=runner,
-        clock=lambda: NOW,
-        idle_memory_baseline_mib=300,
-        idle_memory_tolerance_mib=50,
-    ).snapshot()
-
-    assert snapshot.gpus[0].idle is True
-    assert snapshot.gpus[1].process_count == 0
-    assert snapshot.gpus[1].idle is False
 
 
 @pytest.mark.parametrize(
@@ -254,6 +70,7 @@ def test_worker_readiness_requires_a_fresh_running_heartbeat(heartbeat_status: s
         heartbeat={
             "server_id": "gpu01",
             "worker_id": "gpu01:host",
+            "release": __version__,
             "pid": identity.pid,
             "status": heartbeat_status,
             "started_at": NOW.isoformat(),
@@ -263,10 +80,10 @@ def test_worker_readiness_requires_a_fresh_running_heartbeat(heartbeat_status: s
         },
     )
 
-    ready, reason = worker_readiness(status, server_id="gpu01", now=NOW)
+    readiness = worker_readiness(status, server_id="gpu01", now=NOW)
 
-    assert ready is False
-    assert heartbeat_status in reason
+    assert readiness.ready is False
+    assert heartbeat_status in readiness.reason
 
 
 def test_worker_readiness_matches_identity_server_and_age() -> None:
@@ -279,6 +96,7 @@ def test_worker_readiness_matches_identity_server_and_age() -> None:
             heartbeat={
                 "server_id": server_id,
                 "worker_id": f"{server_id}:host",
+                "release": __version__,
                 "pid": pid,
                 "status": "running",
                 "started_at": NOW.isoformat(),
@@ -288,15 +106,15 @@ def test_worker_readiness_matches_identity_server_and_age() -> None:
             },
         )
 
-    assert worker_readiness(status(), server_id="gpu01", now=NOW) == (True, "ready")
-    assert worker_readiness(status(pid=999), server_id="gpu01", now=NOW)[0] is False
-    assert worker_readiness(status(server_id="gpu02"), server_id="gpu01", now=NOW)[0] is False
+    assert worker_readiness(status(), server_id="gpu01", now=NOW).ready is True
+    assert worker_readiness(status(pid=999), server_id="gpu01", now=NOW).ready is False
+    assert worker_readiness(status(server_id="gpu02"), server_id="gpu01", now=NOW).ready is False
     assert (
         worker_readiness(
             status(heartbeat_at=NOW - timedelta(seconds=WORKER_HEARTBEAT_MAX_AGE_SECONDS + 1)),
             server_id="gpu01",
             now=NOW,
-        )[0]
+        ).ready
         is False
     )
     assert (
@@ -304,7 +122,7 @@ def test_worker_readiness_matches_identity_server_and_age() -> None:
             status(heartbeat_at=NOW - timedelta(seconds=WORKER_HEARTBEAT_MAX_AGE_SECONDS)),
             server_id="gpu01",
             now=NOW,
-        )[0]
+        ).ready
         is True
     )
 

@@ -23,7 +23,6 @@ from gpuops.worker.devices import GpuDevice, discover_devices
 from gpuops.worker.runtime import atomic_write_json
 
 CACHE_NAME = "gpu-sample.json"
-LOCK_NAME = "gpu-sample.lock"
 FRESH_MAX_AGE_SECONDS = 15.0
 CONFIRMATION_MIN_GAP_SECONDS = 2.0
 CONFIRMATION_MAX_GAP_SECONDS = 45.0
@@ -114,7 +113,6 @@ class AsyncGpuSampler:
         self.state_directory = state_directory.expanduser()
         self.server_id = server_id
         self.cache_path = self.state_directory / CACHE_NAME
-        self.lock_path = self.state_directory / LOCK_NAME
         self.monotonic_clock = monotonic_clock
         self.clock = clock
         self.device_discovery = device_discovery
@@ -247,15 +245,6 @@ class AsyncGpuSampler:
         state.attempt_id = None
 
     def _start_if_owner(self, state: _DeviceState, now: float) -> bool:
-        # Probe the legacy barrier only; per-device children must never inherit it.
-        barrier_fd = os.open(self.lock_path, os.O_RDWR | os.O_CREAT, 0o600)
-        try:
-            try:
-                fcntl.flock(barrier_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                return False
-        finally:
-            os.close(barrier_fd)
         lock_fd = os.open(self._device_lock_path(state.device), os.O_RDWR | os.O_CREAT, 0o600)
         try:
             try:

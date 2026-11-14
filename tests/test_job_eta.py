@@ -40,13 +40,14 @@ def test_managed_and_process_estimates_share_timing_and_scope():
     assert later["end_at"] == managed["end_at"]
 
 
-def test_legacy_logs_need_explicit_timestamps_to_estimate_without_metadata():
+def test_plain_logs_need_explicit_timestamps_without_file_time():
     record = managed_running_job()
-    assert managed_log_estimate(record, {"content": LOG}, NOW)["end_at"] is None
+    timing = {"sampled_at": NOW.timestamp(), "modified_at": None, "utc_offset_seconds": None}
+    assert managed_log_estimate(record, {**timing, "content": LOG}, NOW)["end_at"] is None
     content = "2026-09-19T09:58:00Z global_step 100/1000\n2026-09-19T09:59:00Z global_step 200/1000"
-    assert managed_log_estimate(record, {"content": content}, NOW)["end_at"]
+    assert managed_log_estimate(record, {**timing, "content": content}, NOW)["end_at"]
     naive = content.replace("Z", "")
-    assert managed_log_estimate(record, {"content": naive}, NOW)["end_at"] is None
+    assert managed_log_estimate(record, {**timing, "content": naive}, NOW)["end_at"] is None
 
 
 def test_phase_progress_is_not_presented_as_whole_job_completion():

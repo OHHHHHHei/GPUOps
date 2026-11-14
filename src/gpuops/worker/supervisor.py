@@ -520,9 +520,10 @@ class DurableSupervisorLauncher:
     def start(self, job: Any) -> Any:
         environment = dict(job.spec.runtime.environment)
         if job.allocation is not None:
+            if set(job.allocation.gpu_uuids) != set(job.allocation.gpu_indices):
+                raise ValueError("GPU allocation is missing its UUID mapping")
             environment["CUDA_VISIBLE_DEVICES"] = ",".join(
-                job.allocation.gpu_uuids.get(index, str(index))
-                for index in job.allocation.gpu_indices
+                job.allocation.gpu_uuids[index] for index in job.allocation.gpu_indices
             )
         argv = list(job.spec.command)
         if job.spec.runtime.conda_environment:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import csv
-import json
 import os
 import pwd
 import subprocess
@@ -90,8 +89,7 @@ class LocalGpuProbe:
     """Read local GPU telemetry and check device readiness.
 
     Production per-device sampling checks PCI config first, then scoped
-    nvidia-smi telemetry, then CUDA initialization for an idle GPU. The legacy
-    host-wide sample prefers gpustat and falls back to nvidia-smi. A GPU is idle
+    nvidia-smi telemetry, then CUDA initialization for an idle GPU. A GPU is idle
     only when it has no compute processes, low utilization, and used memory
     within the calibrated baseline plus tolerance.
     """
@@ -128,43 +126,6 @@ class LocalGpuProbe:
         self.idle_memory_tolerance_mib = idle_memory_tolerance_mib
         self.eligibility_policy = policy
         self.pci_checker = pci_checker if pci_checker is not None else check_pci_config
-
-    def snapshot(self) -> ServerResourceSnapshot:
-        return self.sample().snapshot
-
-    def sample(self) -> GpuProbeSample:
-        deadline = self.monotonic_clock() + self.sample_timeout_seconds
-        errors: list[str] = []
-        try:
-            snapshot, data = self._snapshot_from_gpustat(deadline)
-            self._require_budget(deadline)
-            return GpuProbeSample(snapshot=snapshot, data=data, error_code=None)
-        except ProbeBudgetExhausted as error:
-            errors.append(f"gpustat: {self._error_text(error)}")
-            return GpuProbeSample(
-                snapshot=self._unhealthy_snapshot(errors),
-                data=None,
-                error_code="gpu_query_timeout",
-            )
-        except Exception as error:
-            errors.append(f"gpustat: {self._error_text(error)}")
-
-        try:
-            snapshot, data = self._snapshot_from_nvidia_smi(deadline)
-            self._require_budget(deadline)
-            return GpuProbeSample(snapshot=snapshot, data=data, error_code=None)
-        except ProbeBudgetExhausted as error:
-            errors.append(f"nvidia-smi: {self._error_text(error)}")
-            error_code = "gpu_query_timeout"
-        except Exception as error:
-            errors.append(f"nvidia-smi: {self._error_text(error)}")
-            error_code = "gpu_query_failed"
-
-        return GpuProbeSample(
-            snapshot=self._unhealthy_snapshot(errors),
-            data=None,
-            error_code=error_code,
-        )
 
     def sample_device(self, device: GpuDevice) -> GpuProbeSample:
         """Sample one verified device without issuing any host-wide query."""
@@ -208,110 +169,6 @@ class LocalGpuProbe:
             error="; ".join(errors),
             gpus=[],
         )
-
-    def _snapshot_from_gpustat(
-        self, deadline: float
-    ) -> tuple[ServerResourceSnapshot, dict[str, Any]]:
-        completed = self._run(["gpustat", "--json"], deadline)
-        try:
-            payload = json.loads(completed.stdout)
-        except json.JSONDecodeError as error:
-            raise ProbeCommandError("returned invalid JSON") from error
-        if not isinstance(payload, dict):
-            raise ProbeCommandError("returned an invalid JSON object")
-        raw_gpus = payload.get("gpus")
-        if not isinstance(raw_gpus, list) or not raw_gpus:
-            raise ProbeCommandError("reported no GPUs")
-
-        gpus: list[GpuResource] = []
-        for raw_gpu in raw_gpus:
-            if not isinstance(raw_gpu, dict):
-                raise ProbeCommandError("returned an invalid GPU entry")
-            processes = raw_gpu.get("processes")
-            if not isinstance(processes, list):
-                raise ProbeCommandError("did not report GPU processes")
-            for process in processes:
-                if isinstance(process, dict):
-                    self._enrich_process(process)
-            utilization = self._number(raw_gpu.get("utilization.gpu"), "utilization.gpu")
-            process_count = len(processes)
-            memory_used_mib = self._integer(raw_gpu.get("memory.used"), "memory.used")
-            gpus.append(
-                GpuResource(
-                    index=self._integer(raw_gpu.get("index"), "index"),
-                    uuid=self._text(raw_gpu.get("uuid"), "uuid"),
-                    memory_total_mib=self._integer(raw_gpu.get("memory.total"), "memory.total"),
-                    memory_used_mib=memory_used_mib,
-                    utilization_percent=utilization,
-                    process_count=process_count,
-                    idle=self._is_idle(process_count, utilization, memory_used_mib),
-                )
-            )
-        snapshot = self._healthy_snapshot(gpus)
-        payload["collected_at"] = snapshot.sampled_at.isoformat()
-        return snapshot, payload
-
-    def _snapshot_from_nvidia_smi(
-        self, deadline: float
-    ) -> tuple[ServerResourceSnapshot, dict[str, Any]]:
-        gpu_result = self._run(
-            [
-                "nvidia-smi",
-                "--query-gpu=index,uuid,memory.total,memory.used,utilization.gpu",
-                "--format=csv,noheader,nounits",
-            ],
-            deadline,
-        )
-        process_result = self._run(
-            [
-                "nvidia-smi",
-                "--query-compute-apps=gpu_uuid,pid",
-                "--format=csv,noheader,nounits",
-            ],
-            deadline,
-        )
-        process_pids = self._parse_process_pids(process_result.stdout)
-        gpus: list[GpuResource] = []
-        raw_gpus: list[dict[str, Any]] = []
-        for row in csv.reader(StringIO(gpu_result.stdout)):
-            if not row or all(not value.strip() for value in row):
-                continue
-            if len(row) != 5:
-                raise ProbeCommandError("returned an invalid GPU CSV row")
-            index, uuid, total, used, utilization = (value.strip() for value in row)
-            processes = [self._process_payload(pid) for pid in process_pids.get(uuid, [])]
-            process_count = len(processes)
-            utilization_value = self._number(utilization, "utilization.gpu")
-            memory_used_mib = self._integer(used, "memory.used")
-            gpus.append(
-                GpuResource(
-                    index=self._integer(index, "index"),
-                    uuid=self._text(uuid, "uuid"),
-                    memory_total_mib=self._integer(total, "memory.total"),
-                    memory_used_mib=memory_used_mib,
-                    utilization_percent=utilization_value,
-                    process_count=process_count,
-                    idle=self._is_idle(process_count, utilization_value, memory_used_mib),
-                )
-            )
-            raw_gpus.append(
-                {
-                    "index": self._integer(index, "index"),
-                    "uuid": self._text(uuid, "uuid"),
-                    "name": "NVIDIA GPU",
-                    "memory.total": self._integer(total, "memory.total"),
-                    "memory.used": memory_used_mib,
-                    "utilization.gpu": utilization_value,
-                    "processes": processes,
-                }
-            )
-        if not gpus:
-            raise ProbeCommandError("reported no GPUs")
-        unknown_uuids = set(process_pids).difference(gpu.uuid for gpu in gpus)
-        if unknown_uuids:
-            raise ProbeCommandError("process query referenced an unknown GPU")
-        snapshot = self._healthy_snapshot(gpus)
-        return snapshot, {"gpus": raw_gpus, "collected_at": snapshot.sampled_at.isoformat()}
 
     def _snapshot_from_nvidia_device(
         self, device: GpuDevice, deadline: float
@@ -429,14 +286,6 @@ class LocalGpuProbe:
                 utilization_percent=utilization_percent,
                 memory_used_mib=memory_used_mib,
             )
-        )
-
-    def _healthy_snapshot(self, gpus: list[GpuResource]) -> ServerResourceSnapshot:
-        return ServerResourceSnapshot(
-            server_id=self.server_id,
-            sampled_at=self.clock(),
-            healthy=True,
-            gpus=sorted(gpus, key=lambda gpu: gpu.index),
         )
 
     def _run(

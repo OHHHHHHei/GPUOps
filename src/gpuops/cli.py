@@ -78,9 +78,7 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--json", action="store_true", dest="as_json")
 
     web = subparsers.add_parser("web", help="start the local web console")
-    web.add_argument(
-        "--bind", "--host", dest="host", default="127.0.0.1", help="local bind address"
-    )
+    web.add_argument("--bind", dest="host", default="127.0.0.1", help="local bind address")
     web.add_argument("--port", default=8787, type=int, help="local bind port")
     web.add_argument(
         "--timeout",
@@ -115,10 +113,18 @@ def build_parser() -> argparse.ArgumentParser:
         command = deploy_commands.add_parser(name)
         placement = command.add_mutually_exclusive_group()
         placement.add_argument("--server", action="append")
-        placement.add_argument("--host", action="append", default=[], help=argparse.SUPPRESS)
+        placement.add_argument(
+            "--ssh-alias",
+            action="append",
+            default=[],
+            help="direct SSH target for installation or maintenance",
+        )
         command.add_argument("--json", action="store_true", dest="as_json")
         if name == "install":
             command.add_argument("--project-root", type=Path, default=None)
+            command.add_argument(
+                "--no-start", action="store_true", help="install while keeping the Worker stopped"
+            )
 
     submit = subparsers.add_parser("submit", help="durably submit a job to one remote worker")
     submit.add_argument("job_file")
@@ -126,13 +132,12 @@ def build_parser() -> argparse.ArgumentParser:
     submit.add_argument(
         "--email", choices=["default", "off"], help="override this job's completion email policy"
     )
-    submit.add_argument("--host", help=argparse.SUPPRESS)
+    submit.add_argument("--server", help="override the manifest server")
     submit.add_argument("--json", action="store_true", dest="as_json")
 
     queue = subparsers.add_parser("queue", help="show active job summaries")
     queue.add_argument("--server", action="append")
     queue.add_argument("--json", action="store_true", dest="as_json")
-    queue.add_argument("--all", action="store_true", help="return all full records (legacy output)")
 
     history = subparsers.add_parser("history", help="show recently completed jobs")
     history.add_argument("--server", action="append")
@@ -143,18 +148,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     job = subparsers.add_parser("job", help="show one managed job")
     job.add_argument("run_id")
-    job.add_argument("--server", "--host", dest="host")
+    job.add_argument("--server")
     job.add_argument("--json", action="store_true", dest="as_json")
 
     logs = subparsers.add_parser("logs", help="show bounded console output for one job")
     logs.add_argument("run_id")
-    logs.add_argument("--server", "--host", dest="host")
+    logs.add_argument("--server")
     logs.add_argument("--tail-bytes", type=int, default=64 * 1024)
     logs.add_argument("--json", action="store_true", dest="as_json")
 
     cancel = subparsers.add_parser("cancel", help="cancel one managed job safely")
     cancel.add_argument("run_id")
-    cancel.add_argument("--server", "--host", dest="host")
+    cancel.add_argument("--server")
     cancel.add_argument("--reason")
     cancel.add_argument("--json", action="store_true", dest="as_json")
 
@@ -198,15 +203,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _add_remote_options(parser: argparse.ArgumentParser) -> None:
-    placement = parser.add_mutually_exclusive_group()
-    placement.add_argument("--server", action="append")
-    placement.add_argument(
-        "--host",
-        action="append",
-        default=[],
-        metavar="ID=SSH_ALIAS",
-        help=argparse.SUPPRESS,
-    )
+    parser.add_argument("--server", action="append")
     parser.add_argument(
         "--timeout",
         type=float,
@@ -285,7 +282,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "validate":
         return _validate_job(args.job_file, args.as_json)
     try:
-        targets = _parse_targets(args.host) if args.host else select_client_targets(args.server)
+        targets = select_client_targets(args.server)
     except (OSError, ValueError) as exc:
         print_error(error_payload(exc), as_json=args.as_json)
         return 2
@@ -318,8 +315,8 @@ async def _run_deploy_command(args: argparse.Namespace) -> int:
     from gpuops.deploy import RemoteDeploymentManager
 
     try:
-        targets = select_targets(args.server) if not args.host else ()
-        hosts = args.host or [target.ssh_host for target in targets]
+        targets = select_targets(args.server) if not args.ssh_alias else ()
+        hosts = args.ssh_alias or [target.ssh_host for target in targets]
     except (OSError, ValueError) as error:
         print_error(error_payload(error), as_json=args.as_json)
         return 1
@@ -329,7 +326,12 @@ async def _run_deploy_command(args: argparse.Namespace) -> int:
     async def execute(host: str):  # type: ignore[no-untyped-def]
         try:
             if args.deploy_command == "install":
-                result = await manager.deploy(host, args.project_root, server_id=by_host.get(host))
+                result = await manager.deploy(
+                    host,
+                    args.project_root,
+                    server_id=by_host.get(host),
+                    start_after_install=not args.no_start,
+                )
                 return {"host": host, "ok": True, "result": asdict(result)}
             if args.deploy_command == "status":
                 deployment_status = await manager.status(host)
@@ -432,8 +434,8 @@ async def _run_control_command(args: argparse.Namespace) -> int:
                 else:
                     metadata[JOB_EMAIL_POLICY_KEY] = args.email
                 spec = spec.model_copy(update={"metadata": metadata})
-            if args.host is not None:
-                resources = spec.resources.model_copy(update={"host": args.host})
+            if args.server is not None:
+                resources = spec.resources.model_copy(update={"host": args.server})
                 spec = spec.model_copy(update={"resources": resources})
             run_id = args.run_id or generate_run_id(spec, utc_now())
             validate_run_id(run_id)
@@ -468,19 +470,19 @@ async def _run_control_command(args: argparse.Namespace) -> int:
                 }
         else:
             server_ids = getattr(args, "server", None)
-            if args.command in {"job", "logs", "cancel"} and args.host:
-                server_ids = [args.host]
+            if args.command in {"job", "logs", "cancel"} and args.server:
+                server_ids = [args.server]
             targets = tuple(
                 RemoteTarget(target.id, target.ssh_host)
                 for target in select_client_targets(server_ids)
             )
         if args.command == "queue":
-            rows = await _collect_queues(transport, targets, full=args.all)
+            rows = await _collect_queues(transport, targets)
             outcome = _aggregate_outcome(
                 sum(1 for row in rows if row["online"]),
                 sum(1 for row in rows if not row["online"]),
             )
-            payload = {"outcome": outcome, "view": "all" if args.all else "active", "servers": rows}
+            payload = {"outcome": outcome, "view": "active", "servers": rows}
         elif args.command == "history":
             from gpuops.queries import collect_history
 
@@ -520,7 +522,7 @@ async def _run_control_command(args: argparse.Namespace) -> int:
             payload = {"outcome": outcome, "servers": rows}
         elif args.command in {"job", "logs", "cancel"}:
             by_id = {target.server_id: target for target in targets}
-            target = await _locate_job(transport, targets, by_id, args.run_id, args.host)
+            target = await _locate_job(transport, targets, by_id, args.run_id, args.server)
             if args.command == "job":
                 detail = await transport.get_job_detail(target, args.run_id)
                 if detail is None:
@@ -586,14 +588,10 @@ def _aggregate_outcome(success_count: int, failure_count: int) -> str:
     return "partial"
 
 
-async def _collect_queues(transport, targets, *, full=False):  # type: ignore[no-untyped-def]
+async def _collect_queues(transport, targets):  # type: ignore[no-untyped-def]
     async def collect(target):  # type: ignore[no-untyped-def]
         try:
-            jobs = (
-                await transport.list_jobs(target)
-                if full
-                else await transport.list_summaries(target, statuses=ACTIVE_JOB_STATUSES)
-            )
+            jobs = await transport.list_summaries(target, statuses=ACTIVE_JOB_STATUSES)
             return {
                 "server_id": target.server_id,
                 "online": True,
@@ -619,7 +617,7 @@ async def _locate_job(transport, targets, by_id, run_id, host):  # type: ignore[
             found = await transport.get_job(target, run_id) is not None
             return target, found, None
         except Exception as error:
-            return target, False, str(error).strip() or error.__class__.__name__
+            return target, False, error
 
     results = await asyncio.gather(*(find(target) for target in targets))
     matches = [target for target, found, _error in results if found]
@@ -628,6 +626,11 @@ async def _locate_job(transport, targets, by_id, run_id, host):  # type: ignore[
             f"{target.server_id}: {error}" for target, _found, error in results if error is not None
         ]
         if not matches and unavailable:
+            failures = [error for _target, _found, error in results if error is not None]
+            if all(getattr(error, "code", None) == "version_mismatch" for error in failures):
+                from gpuops.transport import RemoteWorkerError
+
+                raise RemoteWorkerError("version_mismatch", "; ".join(unavailable))
             checked = [
                 target.server_id for target, found, error in results if not found and error is None
             ]
@@ -713,7 +716,7 @@ async def _run_remote_command(args: argparse.Namespace, targets: tuple[ServerTar
         payload = [result.as_dict() for result in results]
         rendered = format_doctor_table(results)
         healthy = all(
-            result.online and bool(result.data and result.data.get("gpustat_ok"))
+            result.online and bool(result.data and result.data.get("telemetry_ok"))
             for result in results
         )
     if args.as_json:
@@ -721,22 +724,6 @@ async def _run_remote_command(args: argparse.Namespace, targets: tuple[ServerTar
     else:
         print(rendered)
     return 0 if healthy else 1
-
-
-def _parse_targets(values: list[str]) -> tuple[ServerTarget, ...]:
-    if not values:
-        return select_targets()
-    targets = []
-    ids = set()
-    for value in values:
-        server_id, separator, ssh_host = value.partition("=")
-        if not separator or not server_id or not ssh_host:
-            raise ValueError(f"invalid --host {value!r}; expected ID=SSH_ALIAS")
-        if server_id in ids:
-            raise ValueError(f"duplicate server id {server_id!r}")
-        ids.add(server_id)
-        targets.append(ServerTarget(id=server_id, label=server_id, ssh_host=ssh_host))
-    return tuple(targets)
 
 
 def _run_web(host: str, port: int, demo: bool, timeout_seconds: float) -> int:

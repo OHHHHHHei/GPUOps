@@ -15,12 +15,13 @@ Windows control machines and non-NVIDIA accelerators are outside this release.
 ## Install
 
 You need Python 3.10+ and OpenSSH (`ssh` and `scp`) on the control machine.
-Install the [v0.3.0 release](https://github.com/OHHHHHHei/GPUOps/releases/tag/v0.3.0)
+The following download commands apply when v0.4.0 is published; before publication,
+use the source installation below. Install the [v0.4.0 release](https://github.com/OHHHHHHei/GPUOps/releases/tag/v0.4.0)
 with [uv](https://docs.astral.sh/uv/getting-started/installation/), including the
 optional Web console:
 
 ```bash
-uv tool install 'gpuops[web] @ https://github.com/OHHHHHHei/GPUOps/releases/download/v0.3.0/gpuops-0.3.0-py3-none-any.whl'
+uv tool install 'gpuops[web] @ https://github.com/OHHHHHHei/GPUOps/releases/download/v0.4.0/gpuops-0.4.0-py3-none-any.whl'
 gpuops version --json
 ```
 
@@ -33,7 +34,7 @@ virtual environment:
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install './gpuops-0.3.0-py3-none-any.whl[web]'
+.venv/bin/python -m pip install './gpuops-0.4.0-py3-none-any.whl[web]'
 .venv/bin/gpuops version --json
 ```
 
@@ -68,9 +69,10 @@ gpuops server list --json
 gpuops status --json
 ```
 
-`server add` reuses a ready installation, starts a stopped Worker, or installs a
-missing Worker from the local GPUOps package. It waits for readiness before
-adding a registry entry. Reusing a ready installation does not upgrade it. The
+`server add` reuses a ready installation of the same release, starts a stopped
+Worker, and installs the local GPUOps package when the server has no installation
+or runs a different release. It waits for readiness before adding a registry
+entry. The
 alias becomes the server ID unless an existing installation already has an
 identity; use the returned `server.id` in job manifests. A fresh registry is
 empty. Registration does not install an Agent skill or copy your experiment
@@ -158,10 +160,9 @@ is `$CODEX_HOME/skills/gpu-infra`. The remote operation is optional; connect a
 server first if it is not registered. Agents
 running as the Worker Unix account on an installed server can use
 `~/.local/bin/gpuops` from any experiment directory without a source checkout or
-an SSH connection back to the current server. Existing older server CLIs may
-lack `version` or `server list`; they can continue using `status`, `queue`, and
-`submit`. Use the control client for version discovery and installation
-maintenance.
+an SSH connection back to the current server. Controllers, server CLIs, and
+running Workers use the same published release. Upgrade a different installation
+with `gpuops deploy install --server ID --json`.
 
 ## Open the Web console
 
@@ -198,8 +199,7 @@ to check status or disable email.
 For a job whose only human email should be the later follow-up analysis, submit
 it with `gpuops submit job.json --email off --json`, then select
 `analysis_complete` in the follow-up registration. This per-job override
-requires an updated Worker that advertises the email-policy capability; an
-older Worker rejects it before enqueue and must be upgraded first.
+requires the same published release on the controller and Worker.
 
 ## Group experiment follow-ups (experimental)
 

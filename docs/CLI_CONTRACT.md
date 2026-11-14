@@ -7,29 +7,24 @@ permissions; GPUOps does not sandbox untrusted code.
 
 ## Versions and compatibility
 
-Run `gpuops version --json` locally to discover these independent versions:
+Run `gpuops version --json` to inspect the installed release and interface names.
+GPUOps 0.4.0 requires the same published release on the controller, server CLI,
+and running Worker. RPC requests carry `release`; a mismatch is rejected with
+`version_mismatch` without retrying an older interface. A rejected submission is
+not accepted. Upgrade through `gpuops deploy install --server ID --json`.
 
-```json
-{
-  "version": "0.3.0",
-  "cli_api_version": "gpuops.cli/v1",
-  "job_api_version": "gpuops/v1",
-  "worker_api_version": "gpuops.worker.rpc/v1"
-}
-```
+Deployment, Worker stopping, and read-only diagnostics remain available to repair
+an installation. `server list` only reads the local registry; deployment and Worker
+status report the installed and running versions. The fixed interface identifiers
+remain `gpuops.cli/v1`, `gpuops/v1`, and `gpuops.worker.rpc/v1`; they name the
+interfaces, while the published release determines the supported contract.
 
-`version` identifies the installed client release. It is not evidence of the
-release running on a server; use `gpuops deploy status --server ID --json` for
-remote deployment information. `worker_api_version` identifies the wire protocol
-the client implements, not every optional feature available on an older Worker.
-
-The CLI contract preserves the command-specific JSON shapes below rather than
-wrapping existing arrays in a new envelope. Within `gpuops.cli/v1`, documented
-fields retain their meanings and types. Clients should tolerate additional
-response fields and handle unknown error/explanation codes as an unknown case.
-A required-field removal, type change, or changed meaning requires a new CLI
-contract version. New optional fields may appear in a later release. Job
-manifests remain strict: unrecognized input fields are rejected.
+JSON shapes remain command-specific. Unknown manifest fields are rejected.
+This release removes `queue --all` and hidden `--host` arguments. Use `queue`
+for active summaries, `history` for completed tasks, and `job` for one full record.
+Use `--server ID` for registered targets, including a submission override;
+`deploy --ssh-alias ALIAS` addresses an unregistered SSH host for maintenance.
+Web binding uses `--bind`.
 
 ## Output and exit status
 
@@ -82,8 +77,7 @@ printed as human-readable text on stderr.
 Fleet operations use `outcome: "success"`, `"partial"`, or `"failed"`.
 Partial results have `ok: false` and exit 1 while retaining successful hosts.
 History suppresses `next_cursor` on partial results to avoid skipping records.
-`queue --all` is a compatibility view of full job records, not the active-summary
-shape. Raw GPU telemetry and human messages may gain device-specific fields;
+Raw GPU telemetry and human messages may gain device-specific fields;
 Agents should use documented state/readiness and job fields for decisions.
 
 On macOS, `alerts status --json` reports whether the local poller is loaded
@@ -125,15 +119,11 @@ the message, not that it reached an inbox. See [notification setup](NOTIFICATION
 Email is independent of job submission and never changes the job's result or
 Worker readiness.
 
-`submit JOB_FILE --email default|off` overrides the job manifest's
-`metadata["gpuops.email"]`. `off` suppresses server-side completion email for
-that job without affecting follow-up email. The client requires the remote
-Worker health response to advertise `capabilities.job_email_policy: true`;
-otherwise submission is definitively rejected before enqueue with
-`unsupported_option` and the Worker must be upgraded. `default` removes the
-per-job override and uses the Worker's configured policy. Automatic placement
-does not filter candidates by this optional capability: upgrade all eligible
-Workers before using `off`, or set `resources.host` to an upgraded Worker.
+`submit JOB_FILE --email default|off` overrides `metadata["gpuops.email"]`.
+`off` suppresses this job's server-side completion mail without affecting follow-up
+mail. `default` removes the override and uses the Worker's configured policy.
+All eligible Workers must run the controller's release; no capability probe or
+per-host downgrade is performed.
 
 ## Experimental completion groups and session follow-ups
 
@@ -219,24 +209,18 @@ Full records returned by `job` include nullable `exit_code` and `launch_error`:
 - `launch_error` describes a captured failure to start or supervise the process.
   A nonzero exit code by itself does not distinguish a launch error from an
   application error.
-- `null` means no structured evidence is available. This includes older Worker
-  responses, old records, queued jobs cancelled before launch, and a supervisor
+- `null` means no structured evidence is available. This includes historical records,
+  queued jobs cancelled before launch, and a supervisor
   that disappeared without recording its result. Do not reconstruct an exit
   code by parsing `failure_reason`.
 
 `failure_reason` remains a human-readable explanation. Summary/history records
 need not carry execution-result fields; query `job RUN_ID` for details.
 
-RPC v1 keeps its original nested `job` record shape for older clients. Updated
-Workers include an optional sibling `execution_result` in `show`, `submit`, and
-`cancel` responses;
-updated clients expose those fields in the CLI job record. This does not require
-a new RPC request or forced upgrade of an already healthy Worker.
-
-New terminal records can persist these result fields. An older release with a
-strict record model may not read them. Deployment rollback checks persisted
-record compatibility before switching Workers and refuses incompatible rollback.
-Do not manually rewrite records to force an old Worker to start.
+RPC responses and stored job records contain nullable `exit_code` and
+`launch_error` directly in `job`. There is no separate `execution_result` field.
+Deployment rollback still checks whether the target can read current records.
+The one-time 0.4.0 cutover uses its original data backup for failure recovery.
 
 ## Submission identity and recovery
 

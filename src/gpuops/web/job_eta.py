@@ -18,9 +18,9 @@ def managed_log_estimate(record: JobRecord, response: dict, now: datetime) -> di
         boundary = min((i for i in (content.find("\n"), content.find("\r")) if i >= 0), default=-1)
         content = content[boundary + 1 :] if boundary >= 0 else ""
     sample = {
-        "sampled_at": response.get("sampled_at", now.timestamp()),
-        "utc_offset_seconds": response.get("utc_offset_seconds"),
-        "logs": {source: {"content": content, "modified_at": response.get("modified_at")}},
+        "sampled_at": response["sampled_at"],
+        "utc_offset_seconds": response["utc_offset_seconds"],
+        "logs": {source: {"content": content, "modified_at": response["modified_at"]}},
     }
     process = {"argv": record.spec.command, "started_at": record.launch.started_at.timestamp()}
     try:

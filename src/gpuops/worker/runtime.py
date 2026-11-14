@@ -18,6 +18,7 @@ from pathlib import Path
 from types import FrameType
 from typing import Any, BinaryIO, Protocol
 
+from gpuops import __version__
 from gpuops.file_io import atomic_write_bytes
 from gpuops.models import StrictModel, utc_now
 from gpuops.worker.process_identity import parse_proc_start_ticks, read_procfs_record
@@ -63,6 +64,7 @@ class RuntimePaths:
 class WorkerHeartbeat(StrictModel):
     server_id: str
     worker_id: str
+    release: str
     pid: int
     status: str
     started_at: datetime
@@ -86,6 +88,18 @@ class WorkerProcessStatus:
     state: WorkerProcessState
     identity: ProcessIdentity | None
     heartbeat: dict[str, Any] | None
+
+    @property
+    def release(self) -> str | None:
+        if (
+            self.state != WorkerProcessState.RUNNING
+            or self.identity is None
+            or self.heartbeat is None
+            or self.heartbeat.get("pid") != self.identity.pid
+        ):
+            return None
+        release = self.heartbeat.get("release")
+        return release if isinstance(release, str) and release else None
 
 
 class _SpawnedProcess(Protocol):
@@ -221,6 +235,7 @@ class WorkerRuntime:
             heartbeat = WorkerHeartbeat(
                 server_id=self.server_id,
                 worker_id=self.worker_id,
+                release=__version__,
                 pid=pid,
                 status="starting",
                 started_at=started_at,

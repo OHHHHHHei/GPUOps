@@ -128,9 +128,9 @@ def read_cache():
         message = snapshot.get("error") or "Worker GPU telemetry sample is unhealthy"
         raise CacheError(code, message, snapshot["sampled_at"])
     if not isinstance(data, dict) or not isinstance(data.get("gpus"), list):
-        raise CacheError("telemetry_unavailable", "Worker telemetry cache has no valid gpustat data", snapshot["sampled_at"])
+        raise CacheError("telemetry_unavailable", "Worker telemetry cache has no valid telemetry data", snapshot["sampled_at"])
     if any(not isinstance(gpu, dict) for gpu in data["gpus"]):
-        raise CacheError("telemetry_unavailable", "Worker telemetry gpustat GPUs are invalid", snapshot["sampled_at"])
+        raise CacheError("telemetry_unavailable", "Worker telemetry telemetry GPUs are invalid", snapshot["sampled_at"])
     collected_at = parse_timestamp(data.get("collected_at"), "data.collected_at")
     if collected_at != sampled_at:
         raise CacheError("telemetry_unavailable", "Worker telemetry timestamps do not match", snapshot["sampled_at"])
@@ -158,13 +158,11 @@ else:
 DOCTOR_SCRIPT = (
     _CACHE_READER
     + r"""
-import shutil
 import sys
 
 result = {
     "python": sys.version.split()[0],
-    "gpustat_path": shutil.which("gpustat"),
-    "gpustat_ok": False,
+    "telemetry_ok": False,
     "error": None,
     "error_code": None,
     "source": "worker_cache",
@@ -178,7 +176,7 @@ except CacheError as exc:
     result["error_code"] = exc.code
     result["sampled_at"] = exc.sampled_at
 else:
-    result["gpustat_ok"] = True
+    result["telemetry_ok"] = True
     result["sampled_at"] = snapshot["sampled_at"]
     result["cache_fresh"] = True
 print(json.dumps(result, separators=(",", ":")), flush=True)

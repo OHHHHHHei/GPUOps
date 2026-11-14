@@ -937,7 +937,15 @@ class FakeQueueTransport:
         tail_bytes: int,
     ) -> dict[str, Any]:
         self.log_calls.append((target.server_id, run_id, tail_bytes))
-        return {"run_id": run_id, "content": self.log_content}
+        return {
+            "run_id": run_id,
+            "content": self.log_content,
+            "sampled_at": CONTROL_NOW.timestamp(),
+            "modified_at": CONTROL_NOW.timestamp(),
+            "utc_offset_seconds": 0,
+            "source": f"/logs/{run_id}.log",
+            "truncated": False,
+        }
 
     async def get_job_detail(self, target: RemoteTarget, run_id: str) -> JobDetail | None:
         self.detail_calls.append((target.server_id, run_id))

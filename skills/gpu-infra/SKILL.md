@@ -12,17 +12,17 @@ locally without SSH. A source-checkout workflow can use `uv run gpuops`.
 
 Read [Agent guide](docs/AGENT_GUIDE.md) for workflows and
 [CLI contract](docs/CLI_CONTRACT.md) for result/error semantics. On the current
-control client, use `gpuops version --json` for version discovery. Older server
-CLIs may lack `version` and `server list`; continue using `status`, `queue`, and
-`submit` there and manage installation from the control client. These references
+control client, use `gpuops version --json` for version discovery. The control
+client and every server must run the same release; on `version_mismatch`, run the
+returned `gpuops deploy install` command from the control client. These references
 ship with this skill. No MCP server or Agent-specific runtime is needed.
 
 ## Discover and Inspect
 
 Use `server list --json` for registered hosts. A fresh registry is empty;
 `server add SSH_ALIAS --json` connects an existing OpenSSH alias, installing or
-starting a Worker if needed. Add does not install a skill or prepare experiment
-assets. Reusing a ready Worker does not upgrade its CLI.
+starting a Worker if needed, and upgrades an installation that runs a different
+release. Add does not install a skill or prepare experiment assets.
 
 Unqualified queries cover registered servers on a control machine and only the
 current server on an installed server. `--server ID` selects a host explicitly;

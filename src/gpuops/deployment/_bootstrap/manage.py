@@ -30,7 +30,10 @@ ACTION = globals().get("ACTION")
 RELEASE_ID = sys.argv[1] if ACTION == "deploy" and len(sys.argv) > 1 else None
 DEPLOYMENT_ID = sys.argv[2] if ACTION == "deploy" and len(sys.argv) > 2 else None
 REQUESTED_SERVER_ID = sys.argv[3] if ACTION == "deploy" and len(sys.argv) > 3 else None
+if REQUESTED_SERVER_ID == "-":
+    REQUESTED_SERVER_ID = None
 SSH_HOST = sys.argv[4] if ACTION == "deploy" and len(sys.argv) > 4 else None
+START_AFTER_INSTALL = ACTION != "deploy" or sys.argv[5:] != ["--no-start"]
 home = Path.home()
 cache = home / ".cache" / "gpuops"
 share = home / ".local" / "share" / "gpuops"
@@ -193,6 +196,11 @@ def worker_snapshot(expected_server_id=None):
         "reason": reason,
         "pid": stored["pid"] if matched else None,
         "server_id": heartbeat.get("server_id") if heartbeat else None,
+        "release": (
+            heartbeat.get("release")
+            if matched and heartbeat and heartbeat.get("pid") == stored["pid"]
+            else None
+        ),
     }
 
 
@@ -247,8 +255,6 @@ def installed_server_id():
 
 
 def deployment_server_id(requested=None):
-    if requested == "":
-        requested = None
     if requested is not None and (
         not isinstance(requested, str)
         or not SERVER_ID_PATTERN.fullmatch(requested)
@@ -352,6 +358,25 @@ def release_complete(release_id):
     )
 
 
+def package_version(release_id):
+    python = releases / release_id / "venv" / "bin" / "python"
+    try:
+        result = subprocess.run(
+            [
+                str(python),
+                "-I",
+                "-c",
+                "from importlib.metadata import version; print(version('gpuops'))",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return (result.stdout.strip() or None) if result.returncode == 0 else None
+
+
 def ensure_rollback_queue_compatible(release_id):
     """Refuse rollback before mutation when its release cannot read durable jobs."""
     jobs = state / "queue" / "jobs"
@@ -392,11 +417,13 @@ def status():
     rows = release_rows()
     previous = next((row["release_id"] for row in rows if row["release_id"] != active), None)
     installed = active is not None and release_complete(active)
+    installed_version = package_version(active) if installed else None
     server_id = installed_server_id()
     state_bytes, share_bytes, cache_bytes = usage()
     worker = worker_snapshot(server_id)
     return {
         "installed": installed,
+        "installed_version": installed_version,
         "current_release": active,
         "previous_release": previous,
         "releases": rows,
@@ -406,7 +433,11 @@ def status():
         "state_bytes": state_bytes,
         "total_bytes": state_bytes + share_bytes + cache_bytes,
         "total_budget_bytes": TOTAL_BUDGET,
-        "worker_ready": worker["ready"],
+        "worker_ready": (
+            worker["ready"]
+            and installed_version is not None
+            and worker.get("release") == installed_version
+        ),
         "worker_release": release_for_pid(worker["pid"]),
         "executable": str(executable) if executable.is_symlink() else None,
         "server_id": server_id,
@@ -485,7 +516,11 @@ def deploy():
     target = releases / RELEASE_ID
     changed = active_before != RELEASE_ID
     server_id = deployment_server_id(REQUESTED_SERVER_ID)
+    install_started = False
     try:
+        if not START_AFTER_INSTALL and worker_snapshot()["process_running"]:
+            raise RuntimeError("stop the GPUOps Worker before installing with --no-start")
+        install_started = True
         if not release_complete(RELEASE_ID):
             if target.exists() and target.name != active_before:
                 shutil.rmtree(target)
@@ -554,19 +589,23 @@ def deploy():
         ensure_executable_link()
         try:
             if changed:
-                stop_worker()
+                if START_AFTER_INSTALL:
+                    stop_worker()
                 atomic_symlink(current, "releases/" + RELEASE_ID)
-            elif not worker_snapshot(server_id)["ready"]:
-                stop_worker()
-            start_worker(RELEASE_ID, server_id)
+            if START_AFTER_INSTALL:
+                if not changed and not worker_snapshot(server_id)["ready"]:
+                    stop_worker()
+                start_worker(RELEASE_ID, server_id)
         except Exception:
-            with suppress(Exception):
-                stop_worker()
+            if START_AFTER_INSTALL:
+                with suppress(Exception):
+                    stop_worker()
             if active_before is None:
                 current.unlink(missing_ok=True)
             else:
                 atomic_symlink(current, "releases/" + active_before)
-                start_worker(active_before, server_id)
+                if START_AFTER_INSTALL:
+                    start_worker(active_before, server_id)
             if (
                 active_before != RELEASE_ID
                 and target.exists()
@@ -587,17 +626,21 @@ def deploy():
         atomic_json(host_identity_path, identity)
         return changed, "deployed " + RELEASE_ID
     except Exception:
+        if not install_started:
+            raise
         switched = False
         with suppress(Exception):
             switched = changed and current_release() == RELEASE_ID
         if switched:
-            with suppress(Exception):
-                stop_worker()
+            if START_AFTER_INSTALL:
+                with suppress(Exception):
+                    stop_worker()
             if active_before is None:
                 current.unlink(missing_ok=True)
             else:
                 atomic_symlink(current, "releases/" + active_before)
-                start_worker(active_before, server_id)
+                if START_AFTER_INSTALL:
+                    start_worker(active_before, server_id)
         if active_before != RELEASE_ID and target.exists() and RELEASE_ID not in live_release_ids():
             shutil.rmtree(target)
         raise

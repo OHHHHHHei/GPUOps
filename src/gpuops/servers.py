@@ -8,6 +8,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from gpuops import __version__
 from gpuops.config import (
     ServerTarget,
     load_targets,
@@ -58,7 +59,7 @@ async def add_server(ssh_alias: str, *, project_root: Path | None = None) -> dic
     remote = RemoteTarget(server_id, ssh_alias)
     transport = SshWorkerTransport(ssh=ssh)
     installed = False
-    if not status.installed:
+    if not status.installed or status.installed_version != __version__:
         await manager.deploy(ssh_alias, project_root, server_id=server_id)
         installed = True
     elif not status.worker_ready:

@@ -57,7 +57,7 @@ def format_doctor_table(results: Iterable[ServerResult]) -> str:
                 result.server.label,
                 "ok" if result.online else "failed",
                 str(data.get("python", "-")),
-                "ok" if data.get("gpustat_ok") else "failed",
+                "ok" if data.get("telemetry_ok") else "failed",
                 _truncate(str(data.get("error") or result.error or ""), 56),
             )
         )

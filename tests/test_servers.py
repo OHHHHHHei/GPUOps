@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock
 import pytest
 from conftest import TEST_TARGETS
 
-from gpuops import servers
+from gpuops import __version__, servers
 from gpuops.cli import main
 from gpuops.config import (
     ServerTarget,
@@ -83,6 +83,7 @@ def connection(monkeypatch):
         status=AsyncMock(
             return_value=SimpleNamespace(
                 installed=False,
+                installed_version=None,
                 worker_ready=False,
                 server_id=None,
             )
@@ -116,6 +117,7 @@ def test_add_without_checkout_passes_installed_distribution_to_deployer(connecti
 def test_repeat_add_reuses_ready_worker_and_preserves_legacy_identity(connection) -> None:
     connection.manager.status.return_value = SimpleNamespace(
         installed=True,
+        installed_version=__version__,
         worker_ready=True,
         server_id="gpu01",
     )
@@ -134,6 +136,7 @@ def test_repeat_add_reuses_ready_worker_and_preserves_legacy_identity(connection
 def test_add_starts_existing_stopped_worker_without_deployment(connection) -> None:
     connection.manager.status.return_value = SimpleNamespace(
         installed=True,
+        installed_version=__version__,
         worker_ready=False,
         server_id="lab-a100",
     )
@@ -145,10 +148,27 @@ def test_add_starts_existing_stopped_worker_without_deployment(connection) -> No
     ]
 
 
+def test_add_upgrades_a_ready_worker_on_another_installed_version(connection) -> None:
+    connection.manager.status.return_value = SimpleNamespace(
+        installed=True,
+        installed_version="0.3.0",
+        worker_ready=True,
+        server_id="gpu01",
+    )
+    result = asyncio.run(servers.add_server("lab-gpu01", project_root=ROOT))
+
+    assert result["installed"] is True
+    connection.manager.deploy.assert_awaited_once_with("lab-gpu01", ROOT, server_id="gpu01")
+    assert [call.args[1] for call in connection.transport.worker_command.await_args_list] == [
+        "status"
+    ]
+
+
 @pytest.mark.parametrize("identity", ["another-id", "gpu02"])
 def test_add_does_not_mutate_installed_server_with_identity_conflict(connection, identity) -> None:
     connection.manager.status.return_value = SimpleNamespace(
         installed=True,
+        installed_version=__version__,
         worker_ready=True,
         server_id=identity,
     )
@@ -177,6 +197,7 @@ def test_failed_add_keeps_registration_unchanged(connection, stage, monkeypatch)
 def test_add_waits_for_slow_worker_start(connection, monkeypatch) -> None:
     connection.manager.status.return_value = SimpleNamespace(
         installed=True,
+        installed_version=__version__,
         worker_ready=False,
         server_id="lab-a100",
     )

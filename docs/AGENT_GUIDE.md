@@ -5,9 +5,9 @@ CLI is the integration surface; a Codex skill is optional. Install the CLI with
 the [project setup](https://github.com/OHHHHHHei/GPUOps/blob/main/README.md#install), then read
 [CLI contract](CLI_CONTRACT.md) for versioning, result shapes, and exit behavior.
 Use `gpuops version --json` on the current control client to identify it before
-integrating. Older installed server CLIs may lack `version` and `server list`;
-continue using their existing `status`, `queue`, and `submit` commands and manage
-installation from the control client.
+integrating. The control client and every server must run the same release; a
+mismatch is reported as `version_mismatch` with the `gpuops deploy install`
+command that fixes it.
 
 Submission validates the manifest and checks Worker readiness automatically.
 Once an experiment is authorized and its code, environment, and data are ready
@@ -33,10 +33,10 @@ not configure that `PATH` entry.
 | Cancel managed work | `gpuops cancel RUN_ID --json` | `cancel_requested` or `cancelled`; query again for completion. |
 
 To connect a server, run `gpuops server add SSH_ALIAS --json` on the control
-machine. GPUOps reuses a ready installation, starts a stopped Worker, or
-installs a missing Worker using the locally installed package. It waits for
-readiness before creating a registration; failure creates no new registry
-entry. Reusing a ready Worker does not upgrade its CLI. An existing remote
+machine. GPUOps reuses a ready installation of the same release, starts a
+stopped Worker, and installs the locally installed package when the server has
+no installation or runs a different release. It waits for readiness before
+creating a registration; failure creates no new registry entry. An existing remote
 `host.json` preserves its server ID; otherwise the SSH alias becomes the ID.
 Read `server.id` from the result and `gpuops server list --json` for the current
 fleet. A fresh installation has an empty registry at
@@ -83,13 +83,16 @@ waits for two reliable idle samples. Multi-host automatic placement still needs
 fresh GPU evidence to choose a host. `status`, `doctor`, and job explanations
 read the Worker's shared sample; repeating them does not force a new GPU query.
 
+Controllers, server CLIs, and running Workers use the same published release.
+A `version_mismatch` requires deployment of that release; do not try removed
+flags or older RPC variants. `submit --server ID` overrides the manifest target.
+
 ## Active Jobs and History
 
 `queue` returns only queued, leased, starting, running, and cancellation-pending
 jobs. Entries are small summaries: `run_id`, `project`, `status`, GPU IDs,
 priority, and timestamps. Full commands, environment settings, and logs are read
-with `job RUN_ID` and `logs RUN_ID` when needed. `queue --all` explicitly retains
-the previous full-record output for existing scripts.
+with `job RUN_ID` and `logs RUN_ID` when needed.
 
 `history` returns succeeded, failed, and cancelled summaries across the selected hosts,
 newest completion first. Each entry includes `server_id` and `run_id`. Defaults

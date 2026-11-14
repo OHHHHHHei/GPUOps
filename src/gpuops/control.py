@@ -35,6 +35,10 @@ class ControlError(RuntimeError):
 class HostSelectionError(ControlError):
     """No live target can safely accept an automatically placed job."""
 
+    def __init__(self, message: str, *, code: str = "host_unavailable") -> None:
+        super().__init__(message)
+        self.code = code
+
 
 class SubmissionConflict(ControlError):
     """A run id is already associated with different submission data."""
@@ -274,18 +278,7 @@ class SubmissionJournal:
 
     def _write_unlocked(self, entry: JournalEntry) -> None:
         target = self._path(entry.run_id)
-        absent_results = (
-            {
-                field
-                for field in ("exit_code", "launch_error")
-                if getattr(entry.remote_record, field) is None
-            }
-            if entry.remote_record is not None
-            else set()
-        )
-        payload = (
-            entry.model_dump_json(indent=2, exclude={"remote_record": absent_results}) + "\n"
-        ).encode("utf-8")
+        payload = (entry.model_dump_json(indent=2) + "\n").encode("utf-8")
         atomic_write_bytes(target, payload, prefix=f".{entry.run_id}.")
 
     @contextmanager
@@ -448,8 +441,15 @@ class ControlClient:
                 continue
             evaluations.append(evaluation)
         if not evaluations:
+            mismatch = all(
+                isinstance(item, Exception) and getattr(item, "code", None) == "version_mismatch"
+                for item in inspections
+            )
             details = "; ".join(errors) or "no targets returned a usable state"
-            raise HostSelectionError(f"no live host can accept the job: {details}")
+            raise HostSelectionError(
+                f"no live host can accept the job: {details}",
+                code="version_mismatch" if mismatch else "host_unavailable",
+            )
         return min(evaluations, key=lambda evaluation: evaluation.score).target
 
     async def _finish_pending(
@@ -462,6 +462,10 @@ class ControlClient:
         try:
             existing = await self.transport.get_job(target, entry.run_id)
         except Exception as error:
+            if not reconciled and _exception_code(error, "lookup_failed") == "version_mismatch":
+                raise self._not_accepted(
+                    entry, _error_text(error), code="version_mismatch"
+                ) from error
             raise self._uncertain(
                 entry,
                 f"cannot reconcile {entry.run_id!r} on {target.server_id}: {_error_text(error)}",

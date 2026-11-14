@@ -32,8 +32,9 @@ registry for fleet selection; the Web reloads changes without requiring a
 restart and renders the physical GPU indices reported by each server.
 
 `server add SSH_ALIAS` inspects the remote installation before changing it. A
-ready installation is reused without upgrading its CLI, a stopped Worker is
-started, and a missing installation is deployed from the local package. Add
+ready installation of the same release is reused, a stopped Worker is started,
+and a missing installation or one with a different release is deployed from the
+local package. Add
 waits for Worker readiness before registration, leaving the local registry unchanged on failure. A
 pre-existing remote `host.json` determines the stable server ID; otherwise the
 SSH alias supplies it. Registration does not install an Agent skill.

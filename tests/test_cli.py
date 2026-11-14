@@ -5,6 +5,7 @@ from io import BytesIO, TextIOWrapper
 
 import pytest
 
+from gpuops import __version__
 from gpuops.cli import main
 from gpuops.control import ReconcileReport
 from gpuops.models import JobRecord, JobSpec, JobStatus, utc_now
@@ -70,9 +71,9 @@ def test_validate_rejects_unsupported_tracking(capsys, tmp_path) -> None:
 
 @pytest.mark.parametrize(
     "command,selection",
-    [("status", ["--server", "gpu02"]), ("doctor", ["--host", "gpu02=lab-gpu02"])],
+    [("status", ["--server", "gpu02"]), ("doctor", ["--server", "gpu02"])],
 )
-def test_monitor_server_selection_preserves_legacy_mapping(monkeypatch, command, selection) -> None:
+def test_monitor_server_selection_uses_registry(monkeypatch, command, selection) -> None:
     captured = []
 
     async def run_remote(args, targets):
@@ -84,8 +85,10 @@ def test_monitor_server_selection_preserves_legacy_mapping(monkeypatch, command,
     assert captured == [("gpu02", "lab-gpu02")]
 
 
-@pytest.mark.parametrize("selection", [["--server", "gpu02"], ["--host", "lab-gpu02"]])
-def test_deployment_server_selection_preserves_legacy_alias(monkeypatch, capsys, selection) -> None:
+@pytest.mark.parametrize("selection", [["--server", "gpu02"], ["--ssh-alias", "lab-gpu02"]])
+def test_deployment_accepts_registered_server_or_direct_ssh_alias(
+    monkeypatch, capsys, selection
+) -> None:
     from dataclasses import dataclass
 
     calls = []
@@ -121,7 +124,7 @@ def test_queue_server_selection_uses_shared_mapping(monkeypatch, capsys) -> None
 
 
 def test_web_command_rejects_public_bind(capsys) -> None:
-    assert main(["web", "--host", "0.0.0.0"]) == 2
+    assert main(["web", "--bind", "0.0.0.0"]) == 2
     assert "loopback" in capsys.readouterr().err
 
 
@@ -137,6 +140,7 @@ def test_worker_status_is_machine_readable(capsys, tmp_path) -> None:
     assert result == {
         "ok": True,
         "status": "stopped",
+        "release": None,
         "ready": False,
         "reason": "worker process is stopped",
         "identity": None,
@@ -186,6 +190,7 @@ def test_worker_rejects_non_positive_interval(
 def test_remote_rpc_reads_one_json_request(monkeypatch, capsys, tmp_path) -> None:
     request = {
         "api_version": "gpuops.worker.rpc/v1",
+        "release": __version__,
         "method": "health",
         "params": {},
     }
@@ -321,11 +326,18 @@ def test_reconcile_pending_is_not_reported_as_success(monkeypatch, capsys) -> No
     assert payload["errors"] == {"run-pending": "gpu02 unavailable"}
 
 
-def test_job_lookup_distinguishes_unavailable_hosts_from_missing_job(monkeypatch, capsys) -> None:
+@pytest.mark.parametrize("mismatch", [False, True])
+def test_job_lookup_distinguishes_unavailable_hosts_from_missing_job(
+    monkeypatch, capsys, mismatch
+) -> None:
     class FakeTransport:
         async def get_job(self, target, run_id):  # type: ignore[no-untyped-def]
             del run_id
             if target.server_id == "gpu02":
+                if mismatch:
+                    from gpuops.transport import RemoteWorkerError
+
+                    raise RemoteWorkerError("version_mismatch", "upgrade gpu02")
                 raise OSError("SSH timed out")
             return None
 
@@ -335,6 +347,16 @@ def test_job_lookup_distinguishes_unavailable_hosts_from_missing_job(monkeypatch
     assert main(["job", "run-unknown", "--json"]) == 1
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is False
+    if mismatch:
+        assert payload["error_code"] == "version_mismatch"
+        assert "gpu02: upgrade gpu02" in payload["error"]
+        return
     assert "could not be located" in payload["error"]
     assert "gpu02: SSH timed out" in payload["error"]
     assert "not found on: gpu01" in payload["error"]
+
+
+@pytest.mark.parametrize("arguments", [["queue", "--all"], ["status", "--host", "gpu01=host"]])
+def test_removed_cli_options_are_rejected(arguments, capsys):
+    assert main([*arguments, "--json"]) == 2
+    assert json.loads(capsys.readouterr().out)["error_code"] == "invalid_argument"

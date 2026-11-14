@@ -7,6 +7,7 @@ import sys
 import pytest
 from conftest import TEST_TARGETS
 
+from gpuops import __version__
 from gpuops.cli import main
 from gpuops.models import JobRecord, JobSpec
 from gpuops.monitor import ServerResult
@@ -57,6 +58,7 @@ def test_status_keeps_gpu_and_worker_failures_independent(
             ready = target.server_id != "gpu02" or worker_ready
             return {
                 "ready": ready,
+                "release": __version__,
                 "reason": "running" if ready else "stopped",
                 "heartbeat": {"server_id": target.server_id},
             }
@@ -105,7 +107,11 @@ def test_status_collects_monitor_and_both_workers_concurrently(monkeypatch, caps
             if len(worker_calls) == 2:
                 both_workers_started.set()
             await asyncio.wait_for(both_workers_started.wait(), timeout=1)
-            return {"ready": True, "heartbeat": {"server_id": target.server_id}}
+            return {
+                "ready": True,
+                "release": __version__,
+                "heartbeat": {"server_id": target.server_id},
+            }
 
     monkeypatch.setattr("gpuops.cli.MonitorService", Monitor)
     monkeypatch.setattr("gpuops.transport.SshWorkerTransport", Transport)
@@ -145,7 +151,12 @@ def test_status_text_shows_worker_reason_on_selected_server(monkeypatch, capsys)
 def test_status_does_not_mark_a_different_or_missing_server_heartbeat_ready(heartbeat):
     class Transport:
         async def worker_command(self, target, action):
-            return {"ready": True, "reason": "ready", "heartbeat": heartbeat}
+            return {
+                "ready": True,
+                "release": __version__,
+                "reason": "ready",
+                "heartbeat": heartbeat,
+            }
 
     result = asyncio.run(collect_worker_health(TEST_TARGETS[:1], Transport()))
     assert result["gpu01"]["reachable"] is True
@@ -215,3 +226,15 @@ def test_job_query_returns_explanation_without_submission_or_reconciliation(monk
     assert payload["ok"] is True
     assert payload["job"] == record.model_dump(mode="json")
     assert payload["explanation"] == explanation
+
+
+@pytest.mark.parametrize("release", [None, "0.3.0"])
+def test_status_reports_old_worker_version_as_unavailable(release):
+    class Transport:
+        async def worker_command(self, target, action):
+            return {"ready": True, "release": release, "heartbeat": {"server_id": target.server_id}}
+
+    result = asyncio.run(collect_worker_health(TEST_TARGETS[:1], Transport()))
+    assert result["gpu01"]["ready"] is False
+    assert result["gpu01"]["release"] == release
+    assert result["gpu01"]["error_code"] == "version_mismatch"

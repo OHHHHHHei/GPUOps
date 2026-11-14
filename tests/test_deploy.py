@@ -30,7 +30,7 @@ from gpuops.deploy import (
     copy_wheel,
 )
 from gpuops.models import JobSpec
-from gpuops.ssh import SSHResult
+from gpuops.ssh import SSHClient, SSHResult
 
 
 def command_result(returncode=0, stdout="", stderr=""):
@@ -67,6 +67,7 @@ class FakeSSH:
         return self._response(host, script)
 
     async def run_command(self, host, command, *, stdin, timeout_seconds):
+        command = SSHClient._validate_command(command)
         script = stdin.decode("utf-8")
         self.calls.append((host, script, timeout_seconds, list(command)))
         return self._response(host, script)
@@ -232,8 +233,13 @@ def test_invalid_server_id_is_rejected_before_any_command(server_id: str, tmp_pa
     assert runner.calls == []
 
 
+@pytest.mark.parametrize("start_after_install", [True, False])
+@pytest.mark.parametrize("server_id", ["gpu-node-03", None])
 def test_deploy_builds_prepares_uploads_and_runs_static_installer(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    start_after_install: bool,
+    server_id: str | None,
 ) -> None:
     wheel = b"deploy wheel"
     release_id = "a" * 32
@@ -252,13 +258,19 @@ def test_deploy_builds_prepares_uploads_and_runs_static_installer(
         }
     )
     manager = RemoteDeploymentManager(ssh=ssh, command_runner=runner)
-    result = asyncio.run(manager.deploy("lab-gpu01", tmp_path, server_id="gpu-node-03"))
+    result = asyncio.run(
+        manager.deploy(
+            "lab-gpu01", tmp_path, server_id=server_id, start_after_install=start_after_install
+        )
+    )
     assert result.changed
     assert result.status.current_release == release_id
     assert [call[1] for call in ssh.calls] == [REMOTE_PREPARE_SCRIPT, REMOTE_DEPLOY_SCRIPT]
     assert ssh.calls[0][3][0:3] == ["python3", "-u", "-"]
     assert ssh.calls[1][3][0:3] == ["python3", "-u", "-"]
-    assert ssh.calls[1][3][-2:] == ["gpu-node-03", "lab-gpu01"]
+    assert ssh.calls[1][3][5:] == [server_id or "-", "lab-gpu01"] + (
+        [] if start_after_install else ["--no-start"]
+    )
     assert runner.calls[-1][0][0] == "scp"
 
 
@@ -328,6 +340,7 @@ def test_status_rollback_and_uninstall_use_fixed_scripts() -> None:
     previous = "b" * 64
     status = status_payload(current)
     status["server_id"] = "gpu-node-03"
+    status["installed_version"] = "0.4.0"
     status["previous_release"] = previous
     status["releases"].append(
         {"release_id": previous, "installed_at": "2026-09-18T00:00:00+00:00", "size_bytes": 41}
@@ -344,6 +357,7 @@ def test_status_rollback_and_uninstall_use_fixed_scripts() -> None:
     rolled_back = asyncio.run(manager.rollback("lab-gpu02"))
     removed = asyncio.run(manager.uninstall("lab-gpu02"))
     assert read.current_release == current
+    assert read.installed_version == "0.4.0"
     assert read.previous_release == previous
     assert read.server_id == "gpu-node-03"
     assert rolled_back.status.current_release == previous
@@ -376,6 +390,74 @@ def test_remote_programs_compile_and_status_runs_without_gpuops_imports(tmp_path
     assert payload["ok"] is True
     assert payload["action"] == "status"
     assert payload["status"]["installed"] is False
+
+
+@pytest.mark.parametrize("worker_release", ["0.3.0", "0.4.0"])
+def test_deployment_status_distinguishes_installed_and_running_versions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, worker_release: str
+) -> None:
+    namespace, active_id, _ = rollback_namespace(tmp_path, monkeypatch)
+    active_bin = tmp_path / ".local/share/gpuops/releases" / active_id / "venv/bin"
+    python = active_bin / "python"
+    python.write_text("#!/bin/sh\nprintf '0.4.0\\n'\n", encoding="utf-8")
+    python.chmod(0o700)
+    namespace["worker_snapshot"] = lambda _server_id: {
+        "pid": 1234,
+        "ready": True,
+        "release": worker_release,
+    }
+
+    status = namespace["status"]()
+
+    assert status["current_release"] == active_id
+    assert status["installed_version"] == "0.4.0"
+    assert status["worker_ready"] == (worker_release == "0.4.0")
+
+
+@pytest.mark.parametrize("outcome", ["installed", "running_worker", "activation_failed"])
+def test_deploy_no_start_requires_stopped_worker_and_never_starts_either_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str
+) -> None:
+    namespace, active_id, candidate_id = rollback_namespace(tmp_path, monkeypatch)
+    deployment_id = "d" * 32
+    upload_directory = tmp_path / ".cache/gpuops/uploads" / candidate_id / deployment_id
+    upload_directory.mkdir(parents=True)
+    (upload_directory / "gpuops-0.4.0-py3-none-any.whl").touch()
+    monkeypatch.setattr("socket.gethostname", lambda: "gpu01")
+    monkeypatch.setattr(
+        sys, "argv", ["-", candidate_id, deployment_id, "-", "lab-gpu01", "--no-start"]
+    )
+    exec(compile(REMOTE_DEPLOY_SCRIPT, "<remote-deploy>", "exec"), namespace)
+    namespace["worker_snapshot"] = lambda _server_id=None: {
+        "process_running": outcome == "running_worker",
+        "ready": False,
+        "pid": None,
+    }
+
+    def unexpected_lifecycle(*args):
+        raise AssertionError(f"no-start changed the Worker lifecycle: {args}")
+
+    namespace["start_worker"] = unexpected_lifecycle
+    namespace["stop_worker"] = unexpected_lifecycle
+    if outcome == "activation_failed":
+        # Trigger an error after the candidate has become current.
+        def fail_host_identity(path, _value):
+            assert path == namespace["host_identity_path"]
+            raise OSError("host identity write failed")
+
+        namespace["atomic_json"] = fail_host_identity
+        with pytest.raises(OSError, match="host identity write failed"):
+            namespace["run_action"]()
+    elif outcome == "running_worker":
+        with pytest.raises(RuntimeError, match="stop the GPUOps Worker"):
+            namespace["run_action"]()
+    else:
+        result = namespace["run_action"]()
+        assert result["status"]["worker_ready"] is False
+        assert result["status"]["server_id"] == "gpu01"
+
+    assert namespace["current_release"]() == (candidate_id if outcome == "installed" else active_id)
+    assert not upload_directory.exists()
 
 
 def test_rollback_rejects_incompatible_queue_before_worker_or_symlink_changes(

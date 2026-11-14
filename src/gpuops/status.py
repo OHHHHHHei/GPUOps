@@ -6,10 +6,12 @@ import asyncio
 from collections.abc import Sequence
 from typing import Any
 
+from gpuops import __version__
 from gpuops.cli_errors import error_payload
 from gpuops.config import ServerTarget
 from gpuops.control import RemoteTarget
 from gpuops.transport import SshWorkerTransport
+from gpuops.version import release_mismatch_message
 
 
 async def collect_worker_health(
@@ -23,6 +25,11 @@ async def collect_worker_health(
             )
             ready = status.get("ready") is True
             reason = status.get("reason") or ("ready" if ready else "worker is not ready")
+            error_code = status.get("error_code")
+            if ready and status.get("release") != __version__:
+                ready = False
+                reason = release_mismatch_message(__version__, status.get("release"), target.id)
+                error_code = "version_mismatch"
             heartbeat = status.get("heartbeat")
             if ready and (
                 not isinstance(heartbeat, dict) or heartbeat.get("server_id") != target.id
@@ -32,15 +39,17 @@ async def collect_worker_health(
             return target.id, {
                 "reachable": True,
                 "ready": ready,
+                "release": status.get("release"),
                 "reason": reason,
                 "error": None,
-                "error_code": None,
+                "error_code": error_code,
             }
         except Exception as error:
             failure = error_payload(error)
             return target.id, {
                 "reachable": False,
                 "ready": False,
+                "release": None,
                 "reason": "Worker readiness could not be verified.",
                 "error": failure["error"],
                 "error_code": failure["error_code"],

@@ -7,6 +7,7 @@ from unittest.mock import ANY, Mock, call
 
 import pytest
 
+from gpuops import __version__
 from gpuops.worker import app
 from gpuops.worker.runtime import (
     ProcessIdentity,
@@ -26,6 +27,7 @@ def running_worker(pid: int, *, heartbeat_status: str = "running") -> WorkerProc
     heartbeat = WorkerHeartbeat(
         server_id=SERVER_ID,
         worker_id=f"{SERVER_ID}:host",
+        release=__version__,
         pid=pid,
         status=heartbeat_status,
         started_at=NOW,

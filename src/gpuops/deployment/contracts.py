@@ -69,6 +69,7 @@ class DeploymentStatus:
     worker_release: str | None
     executable: str | None
     server_id: str | None = None
+    installed_version: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

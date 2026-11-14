@@ -132,13 +132,13 @@ def test_launch_writes_receipt_result_and_merged_console(tmp_path: Path) -> None
     "identities,expected",
     [
         ({4: "GPU-four", 5: "GPU-five"}, "GPU-four,GPU-five"),
-        ({}, "4,5"),
+        ({}, None),
     ],
 )
-def test_launcher_binds_confirmed_physical_gpus_and_reads_legacy_leases(
+def test_launcher_binds_confirmed_physical_gpu_uuids(
     tmp_path: Path,
     identities: dict[int, str],
-    expected: str,
+    expected: str | None,
 ) -> None:
     store = QueueStore(tmp_path / "queue")
     record = store.enqueue(
@@ -161,6 +161,11 @@ def test_launcher_binds_confirmed_physical_gpus_and_reads_legacy_leases(
         expected_revision=0,
     )
     supervisor = DurableJobSupervisor(tmp_path / "supervisor")
+    if expected is None:
+        with pytest.raises(ValueError, match="missing its UUID mapping"):
+            DurableSupervisorLauncher(supervisor).start(record)
+        assert not (tmp_path / "supervisor" / record.run_id).exists()
+        return
     DurableSupervisorLauncher(supervisor).start(record)
     result = supervisor.wait(record.run_id, timeout_seconds=5)
     assert result.exit_code == 0

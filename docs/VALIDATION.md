@@ -58,3 +58,10 @@ server-reboot recovery, or compatibility with every NVIDIA driver. A new host
 needs the [remote acceptance procedure](ROADMAP.md#remote-acceptance-gate).
 Rollback to an older Worker that cannot read new persisted records remains
 subject to the existing compatibility check.
+
+## 0.4.0 coordinated cutover
+
+The source changes require a coordinated migration before deployment to existing
+installations. Local tests and PR CI are development checks; they do not establish
+that the live Mac or servers have been upgraded. Record real cutover acceptance
+separately, including restored-history reads and notification/session delivery.

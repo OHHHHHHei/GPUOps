@@ -12,19 +12,26 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from gpuops import __version__
 from gpuops.config import SchedulerSettings
+from gpuops.contracts import is_valid_run_id
 from gpuops.core.queue import (
     InvalidRunId,
     JobNotFound,
     QueueStore,
     SubmissionConflict,
-    re_safe_run_id,
 )
 from gpuops.core.resources import ResourceProbe
 from gpuops.core.storage import StorageBudget, StorageQuotaExceeded
 from gpuops.history import decode_cursor
 from gpuops.models import JobRecord, JobSpec, JobStatus, utc_now, validate_new_submission
-from gpuops.worker.app import LOG_BUDGET_BYTES, STATE_BUDGET_BYTES, worker_readiness
+from gpuops.version import release_mismatch_message
+from gpuops.worker.app import (
+    LOG_BUDGET_BYTES,
+    STATE_BUDGET_BYTES,
+    WorkerReadiness,
+    worker_readiness,
+)
 from gpuops.worker.explanations import explain_job
 from gpuops.worker.runtime import RuntimePaths, WorkerProcessStatus, inspect_worker
 from gpuops.worker.sampling import CachedGpuProbe
@@ -46,6 +53,10 @@ class WorkerRpcError(RuntimeError):
 
 class InvalidEnvelope(WorkerRpcError):
     code = "invalid_envelope"
+
+
+class VersionMismatch(WorkerRpcError):
+    code = "version_mismatch"
 
 
 class InvalidParams(WorkerRpcError):
@@ -155,8 +166,13 @@ class WorkerRpc:
     def handle(self, request: Any) -> dict[str, Any]:
         request_id: str | None = None
         try:
+            if isinstance(request, dict):
+                value = request.get("request_id")
+                if value is not None:
+                    if not isinstance(value, str) or not 1 <= len(value) <= 128:
+                        raise InvalidEnvelope("request_id must be a string of 1 to 128 characters")
+                    request_id = value
             envelope = self._parse_envelope(request)
-            request_id = envelope.get("request_id")
             method = envelope["method"]
             params = envelope["params"]
             result = getattr(self, method)(params)
@@ -205,19 +221,21 @@ class WorkerRpc:
         else:
             if existing.spec != job_spec:
                 raise RunIdConflict(f"run_id {run_id!r} already exists with a different job spec")
-            return {"durable": True, **self._record_result(existing)}
+            return {"durable": True, "job": existing.model_dump(mode="json")}
         try:
             validate_new_submission(job_spec)
         except ValueError as error:
             raise InvalidParams(str(error)) from error
-        ready, reason = self._worker_readiness()
-        if not ready:
-            raise WorkerUnavailable(f"background worker is unavailable: {reason}")
+        readiness = self._inspect_readiness()
+        if readiness.error_code == VersionMismatch.code:
+            raise VersionMismatch(readiness.reason)
+        if not readiness.ready:
+            raise WorkerUnavailable(f"background worker is unavailable: {readiness.reason}")
         try:
             record = self.queue.enqueue(job_spec, run_id=run_id)
         except SubmissionConflict as error:
             raise RunIdConflict(str(error)) from error
-        return {"durable": True, **self._record_result(record)}
+        return {"durable": True, "job": record.model_dump(mode="json")}
 
     def list(self, params: Mapping[str, Any]) -> dict[str, Any]:
         self._validate_param_keys(params, required=set(), optional={"statuses", "summary"})
@@ -237,7 +255,10 @@ class WorkerRpc:
             jobs = self.queue.summaries(statuses)
             return {"jobs": [job.model_dump(mode="json") for job in jobs], "count": len(jobs)}
         records = self.queue.list(statuses)
-        return {"jobs": [self._record_json(record) for record in records], "count": len(records)}
+        return {
+            "jobs": [record.model_dump(mode="json") for record in records],
+            "count": len(records),
+        }
 
     def history(self, params: Mapping[str, Any]) -> dict[str, Any]:
         self._validate_param_keys(params, required=set(), optional={"limit", "project", "cursor"})
@@ -265,7 +286,7 @@ class WorkerRpc:
         if not isinstance(explain, bool):
             raise InvalidParams("explain must be a boolean")
         record = self._get_job(params["run_id"])
-        result = self._record_result(record)
+        result = {"job": record.model_dump(mode="json")}
         if explain:
             result["explanation"] = explain_job(
                 record,
@@ -290,7 +311,7 @@ class WorkerRpc:
             record = self.queue.request_cancel(run_id, reason=reason)
         except JobNotFound as error:
             raise RpcJobNotFound(f"job {run_id!r} does not exist") from error
-        return {"durable": True, **self._record_result(record)}
+        return {"durable": True, "job": record.model_dump(mode="json")}
 
     def logs(self, params: Mapping[str, Any]) -> dict[str, Any]:
         self._validate_param_keys(params, required={"run_id"}, optional={"tail_bytes"})
@@ -372,12 +393,18 @@ class WorkerRpc:
         self._validate_param_keys(params, required=set())
         job_count = self.queue.count()
         usage = self.storage.usage()
-        ready, reason = self._worker_readiness()
+        readiness = self._inspect_readiness()
         return {
-            "status": "ok" if ready else "unavailable",
+            "status": "ok" if readiness.ready else "unavailable",
             "server_id": self.server_id,
-            "durable": ready,
-            "worker": {"ready": ready, "reason": reason},
+            "release": __version__,
+            "durable": readiness.ready,
+            "worker": {
+                "ready": readiness.ready,
+                "reason": readiness.reason,
+                "release": readiness.release,
+                "error_code": readiness.error_code,
+            },
             "queue": {"jobs": job_count},
             "storage": {
                 "total_bytes": usage.total_bytes,
@@ -385,13 +412,17 @@ class WorkerRpc:
                 "total_budget_bytes": self.storage.total_budget_bytes,
                 "log_budget_bytes": self.storage.log_budget_bytes,
             },
-            "capabilities": {"job_email_policy": True},
             "paths": {"queue": "queue", "runs": "runs", "logs": "logs"},
         }
 
     def _worker_readiness(self) -> tuple[bool, str]:
+        readiness = self._inspect_readiness()
+        return readiness.ready, readiness.reason
+
+    def _inspect_readiness(self) -> WorkerReadiness:
         if self.readiness_probe is not None:
-            return self.readiness_probe()
+            ready, reason = self.readiness_probe()
+            return WorkerReadiness(ready, reason, __version__ if ready else None)
         paths = RuntimePaths.from_state_directory(self.state_root)
         return worker_readiness(
             self.worker_inspector(paths),
@@ -406,48 +437,27 @@ class WorkerRpc:
         except JobNotFound as error:
             raise RpcJobNotFound(f"job {run_id!r} does not exist") from error
 
-    @staticmethod
-    def _record_json(record: JobRecord) -> dict[str, Any]:
-        # v1 clients use extra="forbid" for JobRecord. Extend the single-job response
-        # beside the legacy record instead of changing its wire schema.
-        return record.model_dump(mode="json", exclude={"exit_code", "launch_error"})
-
-    @classmethod
-    def _record_result(cls, record: JobRecord) -> dict[str, Any]:
-        return {
-            "job": cls._record_json(record),
-            "execution_result": {
-                "exit_code": record.exit_code,
-                "launch_error": record.launch_error,
-            },
-        }
-
     def _parse_envelope(self, request: Any) -> dict[str, Any]:
         if not isinstance(request, dict):
             raise InvalidEnvelope("request must be a JSON object")
-        allowed = {"api_version", "method", "params", "request_id"}
+        allowed = {"api_version", "release", "method", "params", "request_id"}
         unexpected = set(request).difference(allowed)
         if unexpected:
             raise InvalidEnvelope(f"unexpected envelope fields: {', '.join(sorted(unexpected))}")
         if request.get("api_version") != RPC_API_VERSION:
             raise InvalidEnvelope(f"api_version must be {RPC_API_VERSION!r}")
+        release = request.get("release")
+        if "release" in request and (not isinstance(release, str) or not release):
+            raise InvalidEnvelope("release must be a non-empty string")
+        if release != __version__:
+            raise VersionMismatch(release_mismatch_message(release, __version__, self.server_id))
         method = request.get("method")
         if not isinstance(method, str) or method not in self._METHODS:
             raise UnsupportedMethod(f"unsupported worker RPC method: {method!r}")
         params = request.get("params", {})
         if not isinstance(params, dict):
             raise InvalidEnvelope("params must be a JSON object")
-        request_id = request.get("request_id")
-        if request_id is not None and (
-            not isinstance(request_id, str) or not 1 <= len(request_id) <= 128
-        ):
-            raise InvalidEnvelope("request_id must be a string of 1 to 128 characters")
-        return {
-            "api_version": RPC_API_VERSION,
-            "method": method,
-            "params": params,
-            "request_id": request_id,
-        }
+        return {"method": method, "params": params}
 
     @staticmethod
     def _validate_param_keys(
@@ -466,7 +476,7 @@ class WorkerRpc:
 
     @staticmethod
     def _require_run_id(value: Any) -> str:
-        if not isinstance(value, str) or not re_safe_run_id(value):
+        if not isinstance(value, str) or not is_valid_run_id(value):
             raise InvalidParams("run_id is invalid")
         return value
 

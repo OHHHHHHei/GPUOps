@@ -3,7 +3,15 @@
 Changes are recorded here by release. See [release validation](docs/VALIDATION.md)
 for tested behavior and limits.
 
-## Unreleased
+## 0.4.0 — Unreleased
+
+- Require one published release across controllers, server CLIs and running
+  Workers. Report a version mismatch instead of probing optional features or
+  retrying older RPC variants; `server add` upgrades a different installed release.
+- Return and persist complete execution-result fields. Remove the unused
+  host-wide GPU probe and migration sampling barrier; launches require GPU UUIDs.
+- Replace hidden host arguments with `submit --server` and `deploy --ssh-alias`;
+  remove `queue --all`, and report `doctor.telemetry_ok`.
 
 - Add optional email to macOS Worker stop/recovery alerts. Reuse an SMTP settings
   file with `gpuops alerts enable --email-config`; desktop and email delivery

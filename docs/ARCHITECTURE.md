@@ -154,7 +154,7 @@ processes. Their implementation files follow those responsibilities:
 - `worker/runtime.py`: the Worker lock, heartbeat, PID file, and start/stop operations.
 - `worker/sampling.py`: procfs inventory, independent per-device sampling
   lifecycles, locks and failure backoff, aggregate cache publication, and cached
-  resource reads. It also checks the legacy host-wide lock as a rollout barrier.
+  resource reads. Device locks coordinate all per-device sampling children.
 - `worker/sampling_child.py`: one isolated attempt for one PCI device; that
   device's lock is inherited by NVIDIA command children so a stuck query remains
   the sole owner for that card even across a Worker restart.
@@ -209,18 +209,6 @@ Each card has its own inherited query lock. Ordinary failure backoff is capped
 at 60 seconds; timeouts retry after 60 to 300 seconds from actual child exit,
 so time spent stuck in the driver does not consume the cooldown. One timeout
 does not block cache publication or the control loop.
-The legacy host-wide lock is checked as a migration barrier. A query still in
-kernel sleep retains its per-card lock until it exits, including across a Worker
-restart. Each attempt first checks the target PCI configuration; unavailable
-devices fail before a NVIDIA query. Idle telemetry also requires bounded CUDA
-initialization and UUID verification in a child before it becomes allocatable.
-This does not create a CUDA context or run computation. Failed cards continue
-retrying and recover automatically on fresh success, with no permanent
-quarantine file or manual unblocking step. Recovery still needs two new idle
-observations before allocation. Separate processes cannot isolate a shared
-NVIDIA kernel lock, repair the driver, or prevent other tools from querying the
-same faulty device.
-
 Only completed control loops refresh the heartbeat. Stalled control-loop
 detection still uses the 75-second threshold. Each card retains its actual sample
 timestamp when other card results are published; aggregate publication does not
@@ -359,18 +347,18 @@ reads the pipe itself. It does not recursively search project directories.
 Sampling failures leave GPU monitoring available; no remote service or additional
 Worker deployment is needed.
 
-`web/progress.py` first interprets optional `GPUOPS_PROGRESS` records, then legacy
+`web/progress.py` first interprets optional `GPUOPS_PROGRESS` records, then ordinary
 completed-epoch timings, per-epoch duration summaries, timestamped step counts,
 or tqdm-style progress bars with speeds when no structured prefix is present.
 A recognized but invalid, stale, complete, or insufficient structured record
-stays unknown and blocks a misleading legacy or submitted-duration fallback.
+stays unknown and blocks a misleading plain-log or submitted-duration fallback.
 Progress without whole-training evidence is labelled as a stage estimate.
 Explicit record or log-line timestamps anchor observations; safe untimestamped
-legacy progress uses the log modification time, never the polling time. Old-run
+plain-log progress uses the log modification time, never the polling time. Old-run
 logs, stale progress, completed counters, anomalous timestamps, and estimates in
 the past return unknown. Managed `logs` RPC responses supply source path,
-modification time, sampling time, and server UTC offset; older Workers remain
-usable but may lack the anchors needed for an estimate. Source paths and
+modification time, sampling time, and server UTC offset. These fields are part of
+the same-release RPC contract. Source paths and
 observation times accompany estimates, while raw sampled log contents remain in
 the short-lived local cache. Estimates never reserve GPUs, affect scheduling,
 inspect future shell queues, or change job state. See [Structured progress](PROGRESS.md)
@@ -414,8 +402,8 @@ same queries in memory from the authoritative records, preserving scheduling
 at the cost of slower reads. It requires no separate service, user setting, or
 record deletion policy.
 
-The CLI `queue` requests the same active summaries. `queue --all` preserves the
-old full-record listing; `history` and the Web reuse `queries.collect_history`
+The CLI `queue` requests the same active summaries. `history` and the Web reuse
+`queries.collect_history`
 for cross-host ordering, pagination, and partial failure behavior. Query-only
 commands do not initialize the local submission journal. Host selection reads
 only active queue records. RPC health preserves `queue.jobs` as the total job

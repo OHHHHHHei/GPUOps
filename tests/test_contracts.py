@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-import subprocess
 from datetime import datetime, timezone
 
 import pytest
@@ -142,31 +140,6 @@ def test_direct_invalid_telemetry_is_unknown_and_nonallocatable(
 ) -> None:
     assert DEFAULT_RESOURCE_ELIGIBILITY_POLICY.classify(telemetry) is GpuEligibility.UNKNOWN
     assert DEFAULT_RESOURCE_ELIGIBILITY_POLICY.is_allocatable(telemetry) is False
-
-
-def test_local_probe_rejects_snapshot_with_unknown_eligibility_evidence() -> None:
-    payload = {
-        "gpus": [
-            {
-                "index": 0,
-                "uuid": "GPU-A",
-                "memory.total": 24_576,
-                "memory.used": 200,
-                "processes": [],
-            }
-        ]
-    }
-
-    def runner(command, **kwargs):
-        del kwargs
-        if command[0] == "gpustat":
-            return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
-        return subprocess.CompletedProcess(command, 1, "", "unavailable")
-
-    snapshot = LocalGpuProbe("gpu01", runner=runner, clock=lambda: NOW).snapshot()
-
-    assert snapshot.healthy is False
-    assert snapshot.gpus == []
 
 
 def test_gpu_resource_cannot_allocate_with_unknown_utilization() -> None:

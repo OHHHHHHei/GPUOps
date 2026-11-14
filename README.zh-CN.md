@@ -10,10 +10,12 @@ GPUOps 负责运行已经准备好的实验命令。实验代码、运行环境�
 
 ## 安装
 
-控制端需要 Python 3.10+ 和 OpenSSH（`ssh`、`scp`）。使用 [uv](https://docs.astral.sh/uv/getting-started/installation/) 安装 [v0.3.0](https://github.com/OHHHHHHei/GPUOps/releases/tag/v0.3.0)，包含可选的 Web 控制台：
+0.4.0 发布前请使用下方的源码安装方式；下载链接用于正式发布后。
+
+控制端需要 Python 3.10+ 和 OpenSSH（`ssh`、`scp`）。使用 [uv](https://docs.astral.sh/uv/getting-started/installation/) 安装 [v0.4.0](https://github.com/OHHHHHHei/GPUOps/releases/tag/v0.4.0)，包含可选的 Web 控制台：
 
 ```bash
-uv tool install 'gpuops[web] @ https://github.com/OHHHHHHei/GPUOps/releases/download/v0.3.0/gpuops-0.3.0-py3-none-any.whl'
+uv tool install 'gpuops[web] @ https://github.com/OHHHHHHei/GPUOps/releases/download/v0.4.0/gpuops-0.4.0-py3-none-any.whl'
 gpuops version --json
 ```
 
@@ -23,7 +25,7 @@ gpuops version --json
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install './gpuops-0.3.0-py3-none-any.whl[web]'
+.venv/bin/python -m pip install './gpuops-0.4.0-py3-none-any.whl[web]'
 .venv/bin/gpuops version --json
 ```
 

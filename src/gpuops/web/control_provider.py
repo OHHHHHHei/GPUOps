@@ -202,7 +202,6 @@ class ControlDashboardProvider:
         summary = JobSummary.from_record(record)
         key = (target.server_id, record.run_id)
         if record.status == JobStatus.RUNNING and not log_error:
-            log_response.setdefault("sampled_at", now.timestamp())
             self._log_samples[key] = (record, log_response)
             # Only visited running jobs are retained; queue reads prune completed jobs.
             if len(self._log_samples) > 32:

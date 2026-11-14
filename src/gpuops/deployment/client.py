@@ -54,7 +54,12 @@ class RemoteDeploymentManager:
         self.remote_timeout_seconds = remote_timeout_seconds
 
     async def deploy(
-        self, host: str, project_root: str | Path | None = None, *, server_id: str | None = None
+        self,
+        host: str,
+        project_root: str | Path | None = None,
+        *,
+        server_id: str | None = None,
+        start_after_install: bool = True,
     ) -> DeploymentResult:
         validate_host(host)
         if server_id is not None:
@@ -99,10 +104,18 @@ class RemoteDeploymentManager:
                         timeout_seconds=30.0,
                     )
                 raise
+            arguments: tuple[str, ...] = (
+                artifact.release_id,
+                deployment_id,
+                server_id or "-",
+                host,
+            )
+            if not start_after_install:
+                arguments += ("--no-start",)
             payload = await self._run(
                 host,
                 REMOTE_DEPLOY_SCRIPT,
-                arguments=(artifact.release_id, deployment_id, server_id or "", host),
+                arguments=arguments,
             )
         result = _deployment_result(host, payload)
         if result.status.current_release != artifact.release_id:
@@ -203,4 +216,7 @@ def _deployment_status(host: str, value: Mapping[str, Any]) -> DeploymentStatus:
         worker_release=(str(value["worker_release"]) if value.get("worker_release") else None),
         executable=str(value["executable"]) if value.get("executable") else None,
         server_id=str(value["server_id"]) if value.get("server_id") else None,
+        installed_version=(
+            str(value["installed_version"]) if value.get("installed_version") else None
+        ),
     )

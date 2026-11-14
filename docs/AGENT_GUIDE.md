@@ -83,13 +83,16 @@ waits for two reliable idle samples. Multi-host automatic placement still needs
 fresh GPU evidence to choose a host. `status`, `doctor`, and job explanations
 read the Worker's shared sample; repeating them does not force a new GPU query.
 
+Controllers, server CLIs, and running Workers use the same published release.
+A `version_mismatch` requires deployment of that release; do not try removed
+flags or older RPC variants. `submit --server ID` overrides the manifest target.
+
 ## Active Jobs and History
 
 `queue` returns only queued, leased, starting, running, and cancellation-pending
 jobs. Entries are small summaries: `run_id`, `project`, `status`, GPU IDs,
 priority, and timestamps. Full commands, environment settings, and logs are read
-with `job RUN_ID` and `logs RUN_ID` when needed. `queue --all` explicitly retains
-the previous full-record output for existing scripts.
+with `job RUN_ID` and `logs RUN_ID` when needed.
 
 `history` returns succeeded, failed, and cancelled summaries across the selected hosts,
 newest completion first. Each entry includes `server_id` and `run_id`. Defaults

@@ -127,46 +127,6 @@ def _tick_until_cached(sampler: AsyncGpuSampler, timeout: float = 5) -> None:
     raise AssertionError("sampler did not publish its cache")
 
 
-def test_local_probe_preserves_raw_gpustat_and_process_details() -> None:
-    pid = os.getpid()
-    payload = {
-        "hostname": "test",
-        "gpus": [
-            {
-                "index": 0,
-                "uuid": "GPU-A",
-                "name": "Test GPU",
-                "memory.total": 24_576,
-                "memory.used": 1024,
-                "utilization.gpu": 10,
-                "processes": [{"pid": pid, "command": "python", "custom": "kept"}],
-                "custom.gpu": "kept",
-            }
-        ],
-    }
-
-    def runner(command, **kwargs):
-        del kwargs
-        from subprocess import CompletedProcess
-
-        return CompletedProcess(command, 0, json.dumps(payload), "")
-
-    sample = LocalGpuProbe("gpu01", runner=runner, clock=lambda: NOW).sample()
-
-    assert sample.snapshot.healthy
-    assert sample.data is not None
-    assert sample.data["collected_at"] == sample.snapshot.sampled_at.isoformat()
-    raw_gpu = sample.data["gpus"][0]
-    assert raw_gpu["custom.gpu"] == "kept"
-    process = raw_gpu["processes"][0]
-    assert process["custom"] == "kept"
-    assert "start_time_ticks" in process
-    assert "elapsed_seconds" in process
-    # Linux enriches the current process from /proc; other platforms retain
-    # gpustat's fallback command. Either way the raw custom fields survive.
-    assert process["cmdline"]
-
-
 def test_process_details_are_read_from_procfs(tmp_path: Path) -> None:
     pid = 123
     process_root = tmp_path / str(pid)
@@ -186,26 +146,6 @@ def test_process_details_are_read_from_procfs(tmp_path: Path) -> None:
     assert process["pgrp"] == 123
     assert process["start_time_ticks"] == 250
     assert process["elapsed_seconds"] is not None
-
-
-def test_nvidia_fallback_raw_payload_contains_every_observed_pid() -> None:
-    pid = os.getpid()
-
-    def runner(command, **kwargs):
-        del kwargs
-        from subprocess import CompletedProcess
-
-        if command[0] == "gpustat":
-            raise FileNotFoundError("missing")
-        if "--query-gpu" in command[1]:
-            return CompletedProcess(command, 0, "0, GPU-A, 24576, 1200, 20\n", "")
-        return CompletedProcess(command, 0, f"GPU-A, {pid}\n", "")
-
-    sample = LocalGpuProbe("gpu01", runner=runner, clock=lambda: NOW).sample()
-
-    assert sample.snapshot.gpus[0].process_count == 1
-    assert sample.data is not None
-    assert [item["pid"] for item in sample.data["gpus"][0]["processes"]] == [pid]
 
 
 def test_cached_probe_rejects_bad_cache_and_accepts_historical_confirmation(
@@ -709,24 +649,6 @@ def test_inherited_per_device_lock_blocks_duplicate_after_restart(tmp_path: Path
     finally:
         orphan.terminate()
         orphan.wait(timeout=5)
-
-
-def test_legacy_host_query_barrier_blocks_new_children(tmp_path: Path, monkeypatch) -> None:
-    import fcntl
-
-    device = _device(4)
-    tmp_path.mkdir(exist_ok=True)
-    barrier_fd = os.open(tmp_path / sampling.LOCK_NAME, os.O_RDWR | os.O_CREAT, 0o600)
-    fcntl.flock(barrier_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    calls = []
-    monkeypatch.setattr(sampling.subprocess, "Popen", lambda *args, **kwargs: calls.append(args))
-    sampler = AsyncGpuSampler(tmp_path, "gpu01", device_discovery=lambda: [device])
-    try:
-        sampler.tick()
-        assert calls == []
-        assert sampler.processes == ()
-    finally:
-        os.close(barrier_fd)
 
 
 def test_equivalent_pci_formats_share_one_lock_key(tmp_path: Path) -> None:

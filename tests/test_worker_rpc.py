@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from gpuops import __version__
 from gpuops.core.resources import GpuResource, ServerResourceSnapshot
 from gpuops.models import JobSpec, JobStatus, LaunchInfo
 from gpuops.worker.app import LOG_BUDGET_BYTES, STATE_BUDGET_BYTES
@@ -17,6 +18,13 @@ from gpuops.worker.rpc import (
     HostMismatch,
     InvalidParams,
     WorkerRpc,
+)
+from gpuops.worker.runtime import (
+    ProcessIdentity,
+    WorkerHeartbeat,
+    inspect_worker,
+    write_heartbeat,
+    write_process_identity,
 )
 from gpuops.worker.sampling import CachedGpuProbe
 
@@ -37,6 +45,7 @@ def job_spec(*, job_id: str = "train", host: str = "gpu01") -> dict:
 def envelope(method: str, params: dict | None = None, *, request_id: str = "request-1") -> dict:
     return {
         "api_version": RPC_API_VERSION,
+        "release": __version__,
         "method": method,
         "params": params or {},
         "request_id": request_id,
@@ -190,9 +199,7 @@ def test_submit_retry_returns_matching_legacy_record_before_new_submission_check
     )
 
     assert response["ok"] is True
-    assert response["result"]["job"] == existing.model_dump(
-        mode="json", exclude={"exit_code", "launch_error"}
-    )
+    assert response["result"]["job"] == existing.model_dump(mode="json")
     assert len(rpc.queue.events()) == 1
 
 
@@ -237,8 +244,9 @@ def test_list_and_show_return_json_job_records(tmp_path) -> None:
         "run-normal",
     ]
     assert shown["result"]["job"]["spec"]["id"] == "high"
-    assert set(shown["result"]) == {"job", "execution_result"}
-    assert shown["result"]["execution_result"] == {"exit_code": None, "launch_error": None}
+    assert set(shown["result"]) == {"job"}
+    assert shown["result"]["job"]["exit_code"] is None
+    assert shown["result"]["job"]["launch_error"] is None
     assert shown_without_explanation["result"] == shown["result"]
     json.dumps(listed)
     json.dumps(shown)
@@ -511,9 +519,7 @@ def test_show_preserves_job_and_queue_when_explanation_probe_fails(tmp_path) -> 
     response = rpc.handle(envelope("show", {"run_id": record.run_id, "explain": True}))
 
     assert response["ok"] is True
-    assert response["result"]["job"] == record.model_dump(
-        mode="json", exclude={"exit_code", "launch_error"}
-    )
+    assert response["result"]["job"] == record.model_dump(mode="json")
     explanation = response["result"]["explanation"]
     assert explanation["code"] == "unknown"
     assert explanation["details"]["error"] == "OSError: NVML unavailable with details"
@@ -539,9 +545,7 @@ def test_show_preserves_job_when_probe_returns_unhealthy_snapshot(tmp_path) -> N
     response = rpc.handle(envelope("show", {"run_id": record.run_id, "explain": True}))
 
     assert response["ok"] is True
-    assert response["result"]["job"] == record.model_dump(
-        mode="json", exclude={"exit_code", "launch_error"}
-    )
+    assert response["result"]["job"] == record.model_dump(mode="json")
     assert response["result"]["explanation"]["code"] == "unknown"
     assert response["result"]["explanation"]["details"] == {"error": "GPU probe failed"}
 
@@ -722,8 +726,13 @@ def test_health_reports_layout_usage_and_injected_budgets(tmp_path) -> None:
     assert response["result"]["status"] == "ok"
     assert response["result"]["server_id"] == "gpu01"
     assert response["result"]["durable"] is True
-    assert response["result"]["worker"] == {"ready": True, "reason": "ready"}
-    assert response["result"]["capabilities"] == {"job_email_policy": True}
+    assert response["result"]["release"] == __version__
+    assert response["result"]["worker"] == {
+        "ready": True,
+        "reason": "ready",
+        "release": __version__,
+        "error_code": None,
+    }
     assert response["result"]["storage"]["total_budget_bytes"] == 10_000
     assert response["result"]["storage"]["log_budget_bytes"] == 7_000
     assert response["result"]["paths"] == {
@@ -806,15 +815,83 @@ def test_cancel_unknown_job_returns_defined_error(tmp_path) -> None:
 
 def test_submit_and_health_fail_closed_without_a_live_worker(tmp_path) -> None:
     rpc = WorkerRpc(tmp_path, server_id="gpu01")
+    existing = rpc.queue.enqueue(JobSpec.model_validate(job_spec()), run_id="existing-run")
 
     health = rpc.handle(envelope("health"))
     response = rpc.handle(envelope("submit", {"run_id": "stopped-run", "job_spec": job_spec()}))
+    shown = rpc.handle(envelope("show", {"run_id": existing.run_id}))
 
     assert health["ok"] is True
     assert health["result"]["status"] == "unavailable"
     assert health["result"]["durable"] is False
+    assert health["result"]["worker"]["release"] is None
     assert response["ok"] is False
     assert response["error"]["code"] == "worker_unavailable"
+    assert shown["result"]["job"] == existing.model_dump(mode="json")
+    assert rpc.queue.list() == [existing]
+
+
+@pytest.mark.parametrize("client_release", ["0.3.0", None])
+def test_rpc_rejects_mismatched_or_unversioned_client_before_dispatch(tmp_path, client_release):
+    rpc = WorkerRpc(tmp_path, server_id="gpu01", readiness_probe=lambda: (True, "ready"))
+    request = envelope("submit", {"run_id": "not-accepted", "job_spec": job_spec()})
+    if client_release is None:
+        del request["release"]
+    else:
+        request["release"] = client_release
+
+    response = rpc.handle(request)
+
+    assert response["request_id"] == request["request_id"]
+    assert response["error"]["code"] == "version_mismatch"
+    message = response["error"]["message"]
+    assert (client_release or "unknown") in message
+    assert __version__ in message
+    assert "gpuops deploy install --server gpu01" in message
+    assert rpc.queue.list() == []
+
+
+@pytest.mark.parametrize("worker_release", ["0.3.0", None])
+def test_submit_rejects_a_verified_running_worker_on_another_release(tmp_path, worker_release):
+    identity = ProcessIdentity(pid=4321, start_time_ticks=9876, boot_id="boot-a")
+    rpc = WorkerRpc(
+        tmp_path,
+        server_id="gpu01",
+        clock=lambda: NOW,
+        worker_inspector=lambda paths: inspect_worker(paths, identity_reader=lambda pid: identity),
+    )
+    from gpuops.worker.runtime import RuntimePaths
+
+    paths = RuntimePaths.from_state_directory(tmp_path)
+    write_process_identity(paths.pid_path, identity)
+    write_heartbeat(
+        paths.heartbeat_path,
+        WorkerHeartbeat(
+            server_id="gpu01",
+            worker_id="gpu01:host",
+            release=worker_release or __version__,
+            pid=identity.pid,
+            status="running",
+            started_at=NOW,
+            heartbeat_at=NOW,
+            iteration=1,
+            tick_failures=0,
+        ),
+    )
+    if worker_release is None:
+        raw = json.loads(paths.heartbeat_path.read_text())
+        del raw["release"]
+        paths.heartbeat_path.write_text(json.dumps(raw))
+
+    health = rpc.handle(envelope("health"))["result"]
+    response = rpc.handle(envelope("submit", {"run_id": "new-run", "job_spec": job_spec()}))
+
+    assert health["release"] == __version__
+    assert health["worker"]["release"] == worker_release
+    assert health["worker"]["error_code"] == "version_mismatch"
+    assert health["worker"]["ready"] is False
+    assert response["error"]["code"] == "version_mismatch"
+    assert "gpuops deploy install --server gpu01" in response["error"]["message"]
     assert rpc.queue.list() == []
 
 

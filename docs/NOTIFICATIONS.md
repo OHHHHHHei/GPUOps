@@ -133,3 +133,7 @@ your inbox. The test never stops a Worker or experiment.
 The Mac must be logged in, awake, and able to reach the SSH servers and SMTP
 service. Checks continue with the Web console closed and resume after login.
 `alerts status` reads the latest saved check; it is not a fresh remote query.
+
+All controller and Worker commands use the same published GPUOps release. The
+job email policy is part of that contract; submission does not probe optional
+email capabilities or fall back to an older interface.

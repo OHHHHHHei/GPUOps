@@ -106,7 +106,7 @@ class QueueStore:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     def _path(self, run_id: str) -> Path:
-        if not re_safe_run_id(run_id):
+        if not is_valid_run_id(run_id):
             raise InvalidRunId(f"invalid run_id: {run_id!r}")
         return self.jobs_directory / f"{run_id}.json"
 
@@ -128,12 +128,7 @@ class QueueStore:
 
     def _write_unlocked(self, record: JobRecord) -> None:
         target = self._path(record.run_id)
-        # Absent results keep the old storage schema. Observed terminal results
-        # require a worker that understands them; deployment checks this before rollback.
-        absent_results = {
-            field for field in ("exit_code", "launch_error") if getattr(record, field) is None
-        }
-        payload = (record.model_dump_json(indent=2, exclude=absent_results) + "\n").encode("utf-8")
+        payload = (record.model_dump_json(indent=2) + "\n").encode("utf-8")
         self.storage.ensure_capacity(additional_bytes=len(payload))
         previous_signature = self.index.signature()
         atomic_write_bytes(target, payload, prefix=f".{record.run_id}.")
@@ -566,9 +561,3 @@ class QueueStore:
                     )
                     released.append(updated)
         return released
-
-
-def re_safe_run_id(value: str) -> bool:
-    """Compatibility alias for the shared run ID contract."""
-
-    return is_valid_run_id(value)

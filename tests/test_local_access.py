@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from conftest import TEST_TARGETS
 
+from gpuops import __version__
 from gpuops.cli import main
 from gpuops.config import ServerTarget, local_target, select_client_targets
 from gpuops.control import RemoteTarget, SubmissionJournal
@@ -269,7 +270,7 @@ def test_unqualified_monitor_commands_only_contact_local_server(
 
         async def doctor_all(self):
             return [
-                ServerResult(target, True, data={"gpustat_ok": True}) for target in self.targets
+                ServerResult(target, True, data={"telemetry_ok": True}) for target in self.targets
             ]
 
     class Transport:
@@ -279,6 +280,7 @@ def test_unqualified_monitor_commands_only_contact_local_server(
         async def worker_command(self, target, action):
             return {
                 "ready": True,
+                "release": __version__,
                 "reason": "ready",
                 "heartbeat": {"server_id": target.server_id},
             }

@@ -288,3 +288,48 @@ def test_invalid_run_id_is_rejected_before_submission(submission_context, monkey
     assert payload["error_code"] == "invalid_argument"
     assert payload["submission_state"] == "not_accepted"
     assert "recovery_command" not in payload
+
+
+def test_submission_server_override_and_version_rejection(submission_context, monkeypatch, capsys):
+    from gpuops.transport import RemoteWorkerError
+
+    _journal, _spec, manifest = submission_context
+    calls = []
+
+    class Transport:
+        async def get_job(self, target, run_id):
+            calls.append((target.server_id, run_id))
+            raise RemoteWorkerError("version_mismatch", "upgrade the Worker")
+
+        async def submit(self, *args):
+            pytest.fail("a version mismatch must not submit a job")
+
+    monkeypatch.setattr("gpuops.transport.SshWorkerTransport", Transport)
+    assert (
+        main(["submit", str(manifest), "--server", "gpu02", "--run-id", "new-release", "--json"])
+        == 1
+    )
+    response = json.loads(capsys.readouterr().out)
+    assert response["error_code"] == "version_mismatch"
+    assert response["submission_state"] == "not_accepted"
+    assert calls == [("gpu02", "new-release")]
+
+
+def test_auto_submission_preserves_version_mismatch(submission_context, monkeypatch, capsys):
+    from gpuops.transport import RemoteWorkerError
+
+    journal, spec, manifest = submission_context
+    spec.resources.host = "auto"
+    manifest.write_text(spec.model_dump_json())
+
+    class Transport:
+        async def inspect(self, target):
+            raise RemoteWorkerError("version_mismatch", f"upgrade {target.server_id}")
+
+    monkeypatch.setattr("gpuops.transport.SshWorkerTransport", Transport)
+    assert main(["submit", str(manifest), "--run-id", "blocked", "--json"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error_code"] == "version_mismatch"
+    assert payload["submission_state"] == "not_accepted"
+    assert "upgrade gpu01" in payload["error"] and "upgrade gpu02" in payload["error"]
+    assert journal.get("blocked") is None

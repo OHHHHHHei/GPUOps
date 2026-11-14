@@ -17,13 +17,13 @@ def _loopback_host(value: str) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the local GPUOps console")
-    parser.add_argument("--host", default="127.0.0.1", type=_loopback_host)
+    parser.add_argument("--bind", default="127.0.0.1", type=_loopback_host)
     parser.add_argument("--port", type=int, default=8787)
     parser.add_argument("--demo", action="store_true")
     parser.add_argument("--timeout", type=float, default=MONITOR_TIMEOUT_SECONDS)
     args = parser.parse_args()
     run_web(
-        host=args.host,
+        host=args.bind,
         port=args.port,
         demo=args.demo,
         timeout_seconds=args.timeout,

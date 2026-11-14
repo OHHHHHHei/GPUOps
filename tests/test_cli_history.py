@@ -70,7 +70,7 @@ def query_fleet(tmp_path, monkeypatch, request):
 
 
 @pytest.mark.parametrize("query_fleet", [2], indirect=True)
-def test_queue_defaults_to_active_summaries_with_explicit_legacy_escape(query_fleet, capsys):
+def test_queue_returns_active_summaries(query_fleet, capsys):
     _transport, ssh, workers = query_fleet
     assert main(["queue", "--json"]) == 0
     output = capsys.readouterr().out
@@ -86,14 +86,6 @@ def test_queue_defaults_to_active_summaries_with_explicit_legacy_escape(query_fl
         == {"summary": True, "statuses": sorted(status.value for status in ACTIVE_JOB_STATUSES)}
         for _server, request in ssh.calls
     )
-
-    assert main(["queue", "--all", "--json"]) == 0
-    legacy = json.loads(capsys.readouterr().out)
-    assert legacy["view"] == "all"
-    for host in legacy["servers"]:
-        assert host["jobs"] == [
-            job.model_dump(mode="json") for job in workers[host["server_id"]].queue.list()
-        ]
 
 
 @pytest.mark.parametrize("query_fleet", [32], indirect=True)

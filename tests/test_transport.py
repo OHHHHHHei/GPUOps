@@ -5,8 +5,9 @@ from datetime import datetime, timezone
 
 import pytest
 
+from gpuops import __version__
 from gpuops.control import DefinitiveRemoteSubmissionError, RemoteTarget
-from gpuops.models import JobSpec
+from gpuops.models import JobSpec, JobStatus
 from gpuops.ssh import SSHResult
 from gpuops.transport import (
     RemoteSubmissionRejected,
@@ -118,35 +119,10 @@ def test_submit_uses_fixed_remote_command_and_validates_record() -> None:
         "gpu01",
     ]
     assert [call[2]["method"] for call in ssh.calls] == ["health", "submit"]
+    assert all(call[2]["release"] == __version__ for call in ssh.calls)
 
 
-def test_submit_requires_remote_email_policy_capability_for_email_off() -> None:
-    def factory(request):
-        return response(
-            request,
-            {
-                "status": "ok",
-                "durable": True,
-                "worker": {"ready": True, "reason": "ready"},
-            },
-        )
-
-    import asyncio
-
-    job_spec = spec().model_copy(update={"metadata": {"gpuops.email": "off"}})
-    ssh = FakeSsh(factory)
-    with pytest.raises(RemoteSubmissionRejected, match="upgrade GPUOps") as captured:
-        asyncio.run(
-            SshWorkerTransport(ssh=ssh).submit(
-                RemoteTarget("gpu01", "lab-gpu01"), "silent-run", job_spec
-            )
-        )
-
-    assert captured.value.code == "unsupported_option"
-    assert [call[2]["method"] for call in ssh.calls] == ["health"]
-
-
-def test_submit_sends_email_off_when_remote_declares_capability() -> None:
+def test_submit_sends_email_off_without_capability_probe() -> None:
     def factory(request):
         if request["method"] == "health":
             return response(
@@ -155,7 +131,6 @@ def test_submit_sends_email_off_when_remote_declares_capability() -> None:
                     "status": "ok",
                     "durable": True,
                     "worker": {"ready": True, "reason": "ready"},
-                    "capabilities": {"job_email_policy": True},
                 },
             )
         return response(
@@ -192,6 +167,45 @@ def test_worker_command_accepts_pretty_printed_json_document() -> None:
     )
 
     assert result == {"ok": True, "status": "running", "ready": True}
+
+
+@pytest.mark.parametrize("matching", [True, False])
+def test_start_checks_installed_release_without_requiring_a_running_worker(matching) -> None:
+    import asyncio
+
+    def factory(request):
+        if request is None:
+            return {"ok": True, "status": "starting"}
+        assert request["method"] == "health"
+        assert request["release"] == __version__
+        if matching:
+            return response(request, {"status": "unavailable", "worker": {"ready": False}})
+        return {
+            "api_version": RPC_API_VERSION,
+            "ok": False,
+            "error": {"code": "invalid_envelope", "message": "unexpected envelope fields: release"},
+        }
+
+    ssh = FakeSsh(factory)
+    transport = SshWorkerTransport(ssh=ssh)
+    target = RemoteTarget("gpu01", "lab-gpu01")
+    if matching:
+        assert asyncio.run(transport.worker_command(target, "start"))["status"] == "starting"
+        assert ssh.calls[1][1] == [
+            "~/.local/bin/gpuops",
+            "worker",
+            "start",
+            "--server-id",
+            "gpu01",
+            "--json",
+        ]
+    else:
+        with pytest.raises(RemoteWorkerError) as caught:
+            asyncio.run(transport.worker_command(target, "start"))
+        assert caught.value.code == "version_mismatch"
+        assert len(ssh.calls) == 1
+        asyncio.run(transport.worker_command(target, "stop"))
+        assert ssh.calls[1][1] == ["~/.local/bin/gpuops", "worker", "stop", "--json"]
 
 
 def test_submit_rejects_a_stale_or_degraded_worker_before_enqueue() -> None:
@@ -251,6 +265,69 @@ def test_submit_preserves_definitive_remote_rejection_code() -> None:
 
     assert captured.value.code == "invalid_params"
     assert isinstance(captured.value, RemoteWorkerError)
+
+
+@pytest.mark.parametrize("source", ["older_envelope", "installed_cli", "running_worker"])
+def test_submit_classifies_release_mismatch_as_definitive(source) -> None:
+    import asyncio
+
+    def factory(request):
+        assert request["release"] == __version__
+        error = "GPUOps versions must match; run gpuops deploy install --server gpu01"
+        if source == "running_worker":
+            return response(
+                request,
+                {
+                    "status": "unavailable",
+                    "durable": False,
+                    "worker": {"ready": False, "error_code": "version_mismatch", "reason": error},
+                },
+            )
+        if source == "installed_cli":
+            return {
+                "api_version": RPC_API_VERSION,
+                "request_id": request["request_id"],
+                "ok": False,
+                "error": {"code": "version_mismatch", "message": error},
+            }
+        return {
+            "api_version": RPC_API_VERSION,
+            "ok": False,
+            "error": {"code": "invalid_envelope", "message": "unexpected envelope fields: release"},
+        }
+
+    ssh = FakeSsh(factory)
+    with pytest.raises(
+        RemoteSubmissionRejected, match="gpuops deploy install --server gpu01"
+    ) as caught:
+        asyncio.run(
+            SshWorkerTransport(ssh=ssh).submit(
+                RemoteTarget("gpu01", "lab-gpu01"), "new-run", spec()
+            )
+        )
+
+    assert caught.value.code == "version_mismatch"
+    assert [call[2]["method"] for call in ssh.calls] == ["health"]
+
+
+def test_logs_missing_sample_time_is_a_protocol_error() -> None:
+    import asyncio
+
+    ssh = FakeSsh(
+        lambda request: response(
+            request,
+            {
+                "content": "",
+                "source": None,
+                "modified_at": None,
+                "truncated": False,
+                "utc_offset_seconds": 0,
+            },
+        )
+    )
+    with pytest.raises(RemoteWorkerError, match="sampled_at") as caught:
+        asyncio.run(SshWorkerTransport(ssh=ssh).get_logs(RemoteTarget("gpu01", "lab-gpu01"), "run"))
+    assert caught.value.code == "protocol_error"
 
 
 def test_submit_keeps_protocol_errors_ambiguous() -> None:
@@ -373,37 +450,7 @@ def test_job_detail_requests_explanation_and_preserves_probe_failure() -> None:
     assert ssh.calls[0][2]["params"] == {"run_id": "waiting-run", "explain": True}
 
 
-def test_job_detail_falls_back_to_plain_show_for_an_old_worker() -> None:
-    def factory(request):
-        if request["params"].get("explain") is True:
-            return {
-                "api_version": RPC_API_VERSION,
-                "request_id": request["request_id"],
-                "ok": False,
-                "error": {"code": "invalid_params", "message": "unexpected parameter: explain"},
-            }
-        job = job_payload(request["params"]["run_id"])
-        job["updated_at"] = "2000-01-01T00:00:00+00:00"
-        return response(request, {"job": job})
-
-    import asyncio
-
-    ssh = FakeSsh(factory)
-    detail = asyncio.run(
-        SshWorkerTransport(ssh=ssh).get_job_detail(RemoteTarget("gpu01", "lab-gpu01"), "legacy-run")
-    )
-
-    assert detail is not None
-    assert detail.record.run_id == "legacy-run"
-    assert detail.explanation["code"] == "unknown"
-    assert detail.explanation["observed_at"] != detail.record.updated_at.isoformat()
-    assert [call[2]["params"] for call in ssh.calls] == [
-        {"run_id": "legacy-run", "explain": True},
-        {"run_id": "legacy-run"},
-    ]
-
-
-def test_job_detail_degrades_a_malformed_explanation_to_unknown() -> None:
+def test_job_detail_rejects_a_malformed_explanation() -> None:
     def factory(request):
         return response(
             request,
@@ -415,15 +462,13 @@ def test_job_detail_degrades_a_malformed_explanation_to_unknown() -> None:
 
     import asyncio
 
-    detail = asyncio.run(
-        SshWorkerTransport(ssh=FakeSsh(factory)).get_job_detail(
-            RemoteTarget("gpu01", "lab-gpu01"), "malformed-explanation"
+    with pytest.raises(RemoteWorkerError, match="invalid job explanation") as captured:
+        asyncio.run(
+            SshWorkerTransport(ssh=FakeSsh(factory)).get_job_detail(
+                RemoteTarget("gpu01", "lab-gpu01"), "malformed-explanation"
+            )
         )
-    )
-
-    assert detail is not None
-    assert detail.record.run_id == "malformed-explanation"
-    assert detail.explanation["code"] == "unknown"
+    assert captured.value.code == "protocol_error"
 
 
 def test_job_detail_rejects_a_record_for_another_run() -> None:
@@ -480,33 +525,29 @@ def test_cancel_sends_fixed_rpc_and_validates_durable_record() -> None:
     }
 
 
-def test_summary_fallback_keeps_status_filter_on_older_workers() -> None:
+@pytest.mark.parametrize("method", ["list", "show"])
+def test_query_surfaces_invalid_params_without_retrying(method) -> None:
     import asyncio
 
-    from gpuops.models import JobStatus
-
     def factory(request):
-        if request["params"].get("summary"):
-            return {
-                "api_version": RPC_API_VERSION,
-                "request_id": request["request_id"],
-                "ok": False,
-                "error": {"code": "invalid_params", "message": "unknown summary parameter"},
-            }
-        return response(request, {"jobs": [job_payload("queued-run")]})
+        assert request["method"] == method
+        return {
+            "api_version": RPC_API_VERSION,
+            "request_id": request["request_id"],
+            "ok": False,
+            "error": {"code": "invalid_params", "message": "query parameters are invalid"},
+        }
 
     ssh = FakeSsh(factory)
-    jobs = asyncio.run(
-        SshWorkerTransport(ssh=ssh).list_summaries(
-            RemoteTarget("gpu01", "lab-gpu01"), statuses={JobStatus.QUEUED}
-        )
-    )
-    assert jobs[0].run_id == "queued-run"
-    assert not hasattr(jobs[0], "spec")
-    assert [call[2]["params"] for call in ssh.calls] == [
-        {"summary": True, "statuses": ["queued"]},
-        {"statuses": ["queued"]},
-    ]
+    transport = SshWorkerTransport(ssh=ssh)
+    target = RemoteTarget("gpu01", "lab-gpu01")
+    with pytest.raises(RemoteWorkerError, match="query parameters are invalid") as captured:
+        if method == "list":
+            asyncio.run(transport.list_summaries(target, statuses={JobStatus.QUEUED}))
+        else:
+            asyncio.run(transport.get_job_detail(target, "queued-run"))
+    assert captured.value.code == "invalid_params"
+    assert len(ssh.calls) == 1
 
 
 def test_host_inspection_only_requests_active_records() -> None:

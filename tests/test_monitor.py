@@ -129,8 +129,7 @@ def test_status_table_includes_process_details_and_offline_host():
 def test_doctor_reports_worker_cache_health():
     payload = {
         "python": "3.10.12",
-        "gpustat_path": "/usr/local/bin/gpustat",
-        "gpustat_ok": True,
+        "telemetry_ok": True,
         "error": None,
         "error_code": None,
         "source": "worker_cache",
@@ -143,8 +142,8 @@ def test_doctor_reports_worker_cache_health():
     )
     result = asyncio.run(service.doctor_all())[0]
     assert result.online
-    assert result.data["gpustat_ok"] is True
-    assert "shutil.which" in ssh.calls[0][1]
+    assert result.data["telemetry_ok"] is True
+    assert "read_cache" in ssh.calls[0][1]
     assert "subprocess" not in ssh.calls[0][1]
     assert result.data["source"] == "worker_cache"
 
@@ -152,8 +151,7 @@ def test_doctor_reports_worker_cache_health():
 def test_doctor_keeps_ssh_online_when_worker_cache_is_missing():
     payload = {
         "python": "3.10.12",
-        "gpustat_path": None,
-        "gpustat_ok": False,
+        "telemetry_ok": False,
         "error": "Worker telemetry cache is absent; install and start the GPUOps Worker",
         "error_code": "telemetry_unavailable",
         "source": "worker_cache",
@@ -166,7 +164,7 @@ def test_doctor_keeps_ssh_online_when_worker_cache_is_missing():
     )
     result = asyncio.run(service.doctor_all())[0]
     assert result.online
-    assert result.data["gpustat_ok"] is False
+    assert result.data["telemetry_ok"] is False
 
 
 @pytest.mark.parametrize(
@@ -372,7 +370,7 @@ def test_remote_doctor_reflects_cached_probe_error(tmp_path, monkeypatch, capsys
     assert payload["source"] == "worker_cache"
     assert payload["sampled_at"] == sampled_at.isoformat()
     assert payload["cache_fresh"] is False
-    assert payload["gpustat_ok"] is False
+    assert payload["telemetry_ok"] is False
     assert payload["error_code"] == "gpu_query_timeout"
     assert payload["error"] == "gpustat exceeded its deadline"
 
@@ -390,7 +388,7 @@ def test_remote_doctor_reports_fresh_worker_cache(tmp_path, monkeypatch, capsys)
     assert payload["source"] == "worker_cache"
     assert payload["sampled_at"] == sampled_at.isoformat()
     assert payload["cache_fresh"] is True
-    assert payload["gpustat_ok"] is True
+    assert payload["telemetry_ok"] is True
     assert payload["error"] is None
     assert payload["error_code"] is None
 

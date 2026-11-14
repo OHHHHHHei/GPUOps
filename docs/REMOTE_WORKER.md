@@ -27,8 +27,8 @@ Use live `deploy status`, `fleet status`, and `status` results for installation,
 Worker readiness, and GPU telemetry. These are separate observations. [Release validation](VALIDATION.md) summarizes controlled checks; those checks
 do not certify a new server or assert current health.
 
-Upgrade clients and Workers together when changing shared GPU sampling behavior;
-older clients may query GPUs directly. Monitoring uses the deployment's default
+Controllers, server CLIs, and running Workers must use the same published release.
+Monitoring uses the deployment's default
 state directory. A manually started Worker with a custom `--state-dir` does not
 feed fleet monitoring.
 

@@ -13,7 +13,7 @@ from gpuops import alerts, background, followup_commands, followup_delivery
 from gpuops.cli import main
 from gpuops.control import RemoteTarget
 from gpuops.followup_groups import RemoteJob, create_group
-from gpuops.followups import Followup, completion_message
+from gpuops.followups import CodexQueue, Followup, completion_message
 from gpuops.models import JobRecord, JobSpec, JobStatus, utc_now
 from gpuops.transport import RemoteWorkerError
 
@@ -544,23 +544,39 @@ def test_feature_error_does_not_block_other_feature_or_stats(app, monkeypatch, b
     assert alerts._notify.call_count == (2 if broken == "followups" else 0)
 
 
-@pytest.mark.parametrize("failure", ["invalid_utf8_output", "decode_error"])
+ADAPTER_OUTPUTS = {
+    "invalid_utf8_output": "sys.stdout.buffer.write(b'\\xff\\xfe accepted')\n",
+    # Valid JSON shape with a rejection, but the error text is not UTF-8.
+    "invalid_byte_inside_json": (
+        "sys.stdout.buffer.write(json.dumps({'api_version': 'gpuops.delivery/v1', "
+        "'event_id': event['event_id'], 'accepted': False, 'error': 'bad @ byte'})"
+        ".encode().replace(b'@', b'\\xff'))\n"
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    "failure", ["invalid_utf8_output", "invalid_byte_inside_json", "decode_error"]
+)
 def test_failure_after_adapter_started_is_never_resent(app, monkeypatch, failure):
     bg, _, transport = app
     spool = bg.home / "spool"
     spool.mkdir()
     adapter = bg.home / "adapter.py"
-    # The adapter accepts the event, then prints bytes that are not UTF-8.
+    # The adapter spools the request, then prints output that is not valid UTF-8.
     adapter.write_text(
-        "import pathlib, sys, uuid\n"
-        f"pathlib.Path({str(spool)!r}, uuid.uuid4().hex).touch()\n"
-        "sys.stdout.buffer.write(b'\\xff\\xfe accepted')\n"
+        "import json, pathlib, sys, uuid\n"
+        "raw = sys.stdin.buffer.read()\n"
+        f"pathlib.Path({str(spool)!r}, uuid.uuid4().hex).write_bytes(raw)\n"
+        "event = json.loads(raw)\n"
+        + ADAPTER_OUTPUTS.get(failure, ADAPTER_OUTPUTS["invalid_utf8_output"])
     )
     settings = bg.home / "adapter.json"
     settings.write_text(json.dumps({"command": [sys.executable, str(adapter)]}))
     assert main(["followup", "adapter", "external", str(settings)]) == 0
     row = event(bg, "accepted", status="ready")
     row.harness = "external"
+    row.action = "读取指标并与基线比较"
     bg.event_store().save(row)
     enable_followups(bg)
     if failure == "decode_error":
@@ -575,9 +591,34 @@ def test_failure_after_adapter_started_is_never_resent(app, monkeypatch, failure
     run(bg)
     run(bg)
 
-    assert len(list(spool.iterdir())) == 1
+    [request] = spool.iterdir()
+    # The request itself is always sent as UTF-8, so non-ASCII instructions survive.
+    assert json.loads(request.read_bytes().decode("utf-8"))["action"] == row.action
     assert bg.event_store().get(row.id).status == "delivery_unknown"
     transport.watch.assert_not_called()
+
+
+def test_codex_queue_success_survives_undecodable_receipt_text(tmp_path):
+    codex = tmp_path / "codex"
+    # Exit status 0 means the message was queued; only the receipt text is odd.
+    codex.write_text(
+        f"#!{sys.executable}\nimport sys\nsys.stdout.buffer.write(b'queued \\xff receipt')\n"
+    )
+    codex.chmod(0o755)
+    row = Followup(
+        run_id="done",
+        server_id="gpu01",
+        ssh_host="lab-gpu01",
+        thread_id="original",
+        workspace=str(tmp_path),
+        action="Read metrics",
+        message="Analyze the saved results.",
+    )
+
+    result = CodexQueue(str(codex), str(tmp_path / "codex-home")).send(row)
+
+    assert result.returncode == 0
+    assert result.stdout == "queued � receipt"
 
 
 def test_unexpected_error_in_one_event_does_not_stop_the_round(app, monkeypatch):

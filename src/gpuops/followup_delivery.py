@@ -268,8 +268,9 @@ class DeliveryRouter:
                 input=request,
                 cwd=followup.workspace,
                 capture_output=True,
-                text=True,
-                errors="replace",
+                # A receipt that is not valid UTF-8 breaks the protocol; let decoding fail
+                # so the delivery is recorded as uncertain instead of parsed.
+                encoding="utf-8",
                 timeout=ADAPTER_TIMEOUT_SECONDS,
                 shell=False,
             )

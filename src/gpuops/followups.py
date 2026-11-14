@@ -270,7 +270,9 @@ class CodexQueue:
                 "PATH": f"{Path(self.executable).parent}:{os.environ.get('PATH', os.defpath)}",
             },
             capture_output=True,
-            text=True,
+            # The message goes in argv and the exit status decides acceptance; stdout is
+            # only kept as receipt text, so odd bytes there must not hide a success.
+            encoding="utf-8",
             errors="replace",
             timeout=30,
         )

@@ -1,18 +1,17 @@
-import asyncio
 import json
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import Mock
 
 import pytest
 
 from gpuops.followup_groups import (
     GroupStore,
     RemoteJob,
-    check_groups,
+    apply_group_observations,
     create_group,
     stop_group,
     summarize_group,
 )
-from gpuops.followups import FollowupStore
+from gpuops.followups import FollowupStore, job_key
 from gpuops.models import JobRecord, JobSpec, JobStatus, utc_now
 
 
@@ -55,6 +54,18 @@ def register(groups, events, members, **kwargs):
     )
 
 
+def observe(groups, events, *jobs):
+    by_id = {job.run_id: job for job in jobs}
+    observations = {
+        job_key(member.server_id, member.ssh_host, member.run_id): by_id[member.run_id]
+        for group in groups.list()
+        for member in group.members
+        if member.run_id in by_id
+    }
+    with events.lock():
+        apply_group_observations(groups, events, observations)
+
+
 def test_registration_is_idempotent_but_conflicts_and_stopped_names_are_explicit(tmp_path):
     groups, events = stores(tmp_path)
     members = [RemoteJob(run_id="a", server_id="gpu-a", ssh_host="host-a")]
@@ -92,20 +103,19 @@ def test_all_terminal_cross_host_waits_for_every_success_failure_and_cancel(tmp_
             RemoteJob(run_id="cancel", server_id="gpu-c", ssh_host="host-c"),
         ],
     )
-    transport = Mock(
-        get_job=AsyncMock(
-            side_effect=[
-                job("success", JobStatus.SUCCEEDED, exit_code=0),
-                job("failure", JobStatus.QUEUED),
-                job("cancel", JobStatus.CANCELLED),
-                job("failure", JobStatus.FAILED, exit_code=7, failure_reason="out of memory"),
-            ]
-        )
+    observe(
+        groups,
+        events,
+        job("success", JobStatus.SUCCEEDED, exit_code=0),
+        job("failure", JobStatus.QUEUED),
+        job("cancel", JobStatus.CANCELLED),
     )
-
-    asyncio.run(check_groups(groups, events, transport))
     assert events.list() == []
-    asyncio.run(check_groups(groups, events, transport))
+    observe(
+        groups,
+        events,
+        job("failure", JobStatus.FAILED, exit_code=7, failure_reason="out of memory"),
+    )
 
     saved = groups.get(record.id)
     created = events.get(record.event_id)
@@ -143,16 +153,12 @@ def test_message_reports_one_job_status_only_for_per_job_events(tmp_path, mode):
         ],
         mode=mode,
     )
-    transport = Mock(
-        get_job=AsyncMock(
-            side_effect=[
-                job("failed-first", JobStatus.FAILED, exit_code=1),
-                job("succeeded-last", JobStatus.SUCCEEDED, exit_code=0),
-            ]
-        )
+    observe(
+        groups,
+        events,
+        job("failed-first", JobStatus.FAILED, exit_code=1),
+        job("succeeded-last", JobStatus.SUCCEEDED, exit_code=0),
     )
-
-    asyncio.run(check_groups(groups, events, transport))
 
     event_ids = (
         [record.event_id] if mode == "all_terminal" else [m.event_id for m in record.members]
@@ -181,17 +187,12 @@ def test_per_job_creates_each_event_without_waiting_and_never_duplicates(tmp_pat
         ],
         mode="per_job",
     )
-    transport = Mock(
-        get_job=AsyncMock(
-            side_effect=[
-                job("first", JobStatus.SUCCEEDED, exit_code=0),
-                job("later", JobStatus.QUEUED),
-                job("later", JobStatus.FAILED, exit_code=2, failure_reason="boom"),
-            ]
-        )
+    observe(
+        groups,
+        events,
+        job("first", JobStatus.SUCCEEDED, exit_code=0),
+        job("later", JobStatus.QUEUED),
     )
-
-    asyncio.run(check_groups(groups, events, transport))
     first_event_id = record.members[0].event_id
     later_event_id = record.members[1].event_id
     first_event = events.get(first_event_id)
@@ -199,11 +200,10 @@ def test_per_job_creates_each_event_without_waiting_and_never_duplicates(tmp_pat
     assert first_event.outcomes[1]["status"] == "queued"
     assert not (events.directory / f"{later_event_id}.json").exists()
 
-    asyncio.run(check_groups(groups, events, transport))
-    asyncio.run(check_groups(groups, events, transport))
+    observe(groups, events, job("later", JobStatus.FAILED, exit_code=2, failure_reason="boom"))
+    observe(groups, events, job("first", JobStatus.QUEUED))
     assert events.get(first_event_id) == first_event
     assert events.get(later_event_id).job.status == JobStatus.FAILED
-    assert transport.get_job.await_count == 3
     assert len(events.list()) == 2
 
 
@@ -214,23 +214,20 @@ def test_offline_observation_is_retained_and_restart_creates_event_once(tmp_path
         events,
         [RemoteJob(run_id="run", server_id="gpu-a", ssh_host="host-a")],
     )
-    first_transport = Mock(
-        get_job=AsyncMock(side_effect=[job("run", JobStatus.QUEUED), OSError("offline")])
-    )
-    asyncio.run(check_groups(groups, events, first_transport))
-    asyncio.run(check_groups(groups, events, first_transport))
+    observe(groups, events, job("run", JobStatus.QUEUED))
+    with events.lock():
+        apply_group_observations(groups, events, {job_key("gpu-a", "host-a", "run"): "offline"})
     offline = groups.get(record.id).members[0]
     assert offline.job.status == JobStatus.QUEUED and offline.error == "offline"
     assert events.list() == []
 
-    restarted = Mock(get_job=AsyncMock(return_value=job("run", JobStatus.SUCCEEDED, exit_code=0)))
     restarted_groups = GroupStore(groups.directory)
     restarted_groups.save = Mock(wraps=restarted_groups.save)
     restarted_events = FollowupStore(events.directory)
     for _ in range(2):
-        asyncio.run(check_groups(restarted_groups, restarted_events, restarted))
+        observe(restarted_groups, restarted_events, job("run", JobStatus.SUCCEEDED, exit_code=0))
     assert events.get(record.event_id).job.status == JobStatus.SUCCEEDED
-    assert restarted.get_job.await_count == 1 and restarted_groups.save.call_count == 1
+    assert restarted_groups.save.call_count == 1
     assert len(events.list()) == 1
 
 
@@ -247,9 +244,7 @@ def test_resume_false_records_observation_without_model_message(tmp_path):
         resume=False,
         notify="terminal",
     )
-    transport = Mock(get_job=AsyncMock(return_value=job("run", JobStatus.CANCELLED)))
-
-    asyncio.run(check_groups(groups, events, transport))
+    observe(groups, events, job("run", JobStatus.CANCELLED))
 
     event = events.get(record.event_id)
     summary = summarize_group(groups.get(record.id), events)
@@ -278,16 +273,13 @@ def test_stop_prevents_future_events_stops_ready_but_does_not_revoke_queued(tmp_
         ],
         mode="per_job",
     )
-    transport = Mock(
-        get_job=AsyncMock(
-            side_effect=[
-                job("ready", JobStatus.SUCCEEDED),
-                job("queued", JobStatus.SUCCEEDED),
-                job("future", JobStatus.QUEUED),
-            ]
-        )
+    observe(
+        groups,
+        events,
+        job("ready", JobStatus.SUCCEEDED),
+        job("queued", JobStatus.SUCCEEDED),
+        job("future", JobStatus.QUEUED),
     )
-    asyncio.run(check_groups(groups, events, transport))
     queued = events.get(record.members[1].event_id)
     queued.status = "queued"
     events.save(queued)
@@ -301,9 +293,8 @@ def test_stop_prevents_future_events_stops_ready_but_does_not_revoke_queued(tmp_
     assert summary["status"] == "stopped"
     assert events.get(record.members[0].event_id).status == "stopped"
     assert events.get(record.members[1].event_id).status == "queued"
-    asyncio.run(check_groups(groups, events, transport))
+    observe(groups, events, job("future", JobStatus.SUCCEEDED))
     assert not (events.directory / f"{record.members[2].event_id}.json").exists()
-    assert transport.get_job.await_count == 3
 
 
 def test_bad_group_record_is_isolated(tmp_path):

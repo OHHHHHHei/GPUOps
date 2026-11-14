@@ -16,15 +16,15 @@ from uuid import UUID, uuid4
 
 from pydantic import Field
 
+from gpuops.contracts import RunId
 from gpuops.control import RemoteTarget
 from gpuops.file_io import atomic_write_bytes
 from gpuops.models import JobRecord, StrictModel, utc_now
-from gpuops.transport import SshWorkerTransport
 
 
 class Followup(StrictModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
-    run_id: str
+    run_id: RunId
     server_id: str
     ssh_host: str
     harness: str = "codex-desktop"
@@ -102,39 +102,54 @@ class FollowupStore:
     def save(self, followup: Followup) -> None:
         atomic_write_bytes(self._path(followup.id), followup.model_dump_json(indent=2).encode())
 
-    def add(self, followup: Followup) -> Followup:
+    def add(
+        self, followup: Followup, *, on_registered: Callable[[], None] | None = None
+    ) -> Followup:
         with self.lock():
-            for existing in self.list():
-                if (existing.run_id, existing.server_id, existing.thread_id, existing.group_id) == (
-                    followup.run_id,
-                    followup.server_id,
-                    followup.thread_id,
-                    followup.group_id,
-                ):
-                    if existing.status == "stopped":
-                        # Stop only applies before delivery, so nothing reached the chat.
-                        reactivated = existing.model_copy(
-                            update={
-                                "ssh_host": followup.ssh_host,
-                                "workspace": followup.workspace,
-                                "action": followup.action,
-                                "status": "waiting",
-                                "checked_at": None,
-                                "job": None,
-                                "outcomes": [],
-                                "message": None,
-                                "error": None,
-                            }
-                        )
-                        self.save(reactivated)
-                        return reactivated
-                    if (existing.workspace, existing.action) != (
-                        followup.workspace,
-                        followup.action,
+            registered = self._add_locked(followup)
+            if on_registered is not None:
+                on_registered()
+            return registered
+
+    def _add_locked(self, followup: Followup) -> Followup:
+        for existing in self.list():
+            if (existing.run_id, existing.server_id, existing.thread_id, existing.group_id) == (
+                followup.run_id,
+                followup.server_id,
+                followup.thread_id,
+                followup.group_id,
+            ):
+                if existing.status == "stopped":
+                    # Stop only applies before delivery, so nothing reached the chat.
+                    reactivated = existing.model_copy(
+                        update={
+                            "ssh_host": followup.ssh_host,
+                            "workspace": followup.workspace,
+                            "action": followup.action,
+                            "status": "waiting",
+                            "checked_at": None,
+                            "job": None,
+                            "message": None,
+                            "error": None,
+                        }
+                    )
+                    if (
+                        existing.ssh_host == followup.ssh_host
+                        and existing.job is not None
+                        and existing.job.status.terminal
                     ):
-                        raise ValueError("this job already has a different follow-up in this chat")
-                    return existing
-            self.save(followup)
+                        _record_terminal_job(reactivated, existing.job)
+                    else:
+                        reactivated.outcomes = []
+                    self.save(reactivated)
+                    return reactivated
+                if (existing.workspace, existing.action) != (
+                    followup.workspace,
+                    followup.action,
+                ):
+                    raise ValueError("this job already has a different follow-up in this chat")
+                return existing
+        self.save(followup)
         return followup
 
     def acknowledge(
@@ -148,12 +163,19 @@ class FollowupStore:
                 raise ValueError(
                     "acknowledge the follow-up from its original Codex chat or Harness session"
                 )
-            if followup.status not in {"queued", "delivery_unknown", "received", "completed"}:
+            if followup.status not in {
+                "sending",
+                "queued",
+                "delivery_unknown",
+                "received",
+                "completed",
+            }:
                 raise ValueError("the follow-up has not been delivered")
             if followup.status != "completed":
                 followup.received_at = followup.received_at or utc_now()
+                if followup.status != "received":
+                    followup.error = None
                 followup.status = "received"
-                followup.error = None
                 if summary is not None:
                     followup.status = "completed"
                     followup.completed_at = utc_now()
@@ -242,7 +264,11 @@ class CodexQueue:
                 followup.message,
             ],
             cwd=followup.workspace,
-            env={**os.environ, "CODEX_HOME": self.codex_home},
+            env={
+                **os.environ,
+                "CODEX_HOME": self.codex_home,
+                "PATH": f"{Path(self.executable).parent}:{os.environ.get('PATH', os.defpath)}",
+            },
             capture_output=True,
             text=True,
             timeout=30,
@@ -253,80 +279,151 @@ class CompletionDelivery(Protocol):
     def send(self, followup: Followup) -> subprocess.CompletedProcess[str]: ...
 
 
-async def check_followups(
-    store: FollowupStore, transport: SshWorkerTransport, delivery: CompletionDelivery
+JobKey = tuple[RemoteTarget, str]
+JobObservations = dict[JobKey, JobRecord | str]
+
+
+def job_key(server_id: str, ssh_host: str, run_id: str) -> JobKey:
+    return RemoteTarget(server_id, ssh_host), run_id
+
+
+def _record_terminal_job(followup: Followup, job: JobRecord) -> None:
+    followup.job = job
+    followup.outcomes = [
+        {
+            **job_outcome(followup.server_id, job.run_id, job),
+            "project_workspace": followup.workspace,
+        }
+    ]
+    followup.message = completion_message(followup)
+    followup.status = "ready"
+
+
+def recover_interrupted(store: FollowupStore, records: list[Followup]) -> None:
+    """Convert claims left by a previous round while holding both locks."""
+    for followup in records:
+        if followup.status == "sending":
+            followup.status = "delivery_unknown"
+            followup.error = "interrupted delivery; verify the original chat before retrying"
+            store.save(followup)
+
+
+def pending_followup_jobs(records: list[Followup]) -> Iterator[JobKey]:
+    for followup in records:
+        if followup.status == "waiting" and (
+            followup.job is None or not followup.job.status.terminal
+        ):
+            yield job_key(followup.server_id, followup.ssh_host, followup.run_id)
+
+
+def apply_followup_observations(store: FollowupStore, observations: JobObservations) -> None:
+    """Update the latest waiting records under the record lock."""
+    for followup in store.list():
+        if followup.status != "waiting":
+            continue
+        result = observations.get(job_key(followup.server_id, followup.ssh_host, followup.run_id))
+        if result is None:
+            continue
+        followup.checked_at = utc_now()
+        if isinstance(result, str):
+            followup.error = result
+        else:
+            followup.error = None
+            followup.job = result
+            if result.status.terminal:
+                _record_terminal_job(followup, result)
+        store.save(followup)
+
+
+def pending_email(followup: Followup) -> bool:
+    return followup.email_sent_at is None and (
+        (
+            followup.notify == "terminal"
+            and followup.status != "stopped"
+            and followup.job is not None
+            and followup.job.status.terminal
+        )
+        or (followup.notify == "analysis_complete" and followup.status == "completed")
+    )
+
+
+def pending_delivery(followup: Followup, retryable: set[str]) -> bool:
+    return followup.status in {"ready", "sending"} or (
+        followup.status == "delivery_unknown" and followup.harness in retryable
+    )
+
+
+def deliver_followups(
+    store: FollowupStore,
+    delivery: CompletionDelivery,
+    enabled: Callable[[], bool],
+    retryable: set[str],
 ) -> None:
-    from gpuops.followup_delivery import DeliveryUncertain, send_followup_email
+    from gpuops.followup_delivery import send_followup_email
 
     with store.lock():
-        for followup in store.list():
-            if followup.status == "sending":
-                followup.status = "delivery_unknown"
-                followup.error = "interrupted delivery; verify the original chat before retrying"
-                store.save(followup)
-            if followup.status == "delivery_unknown":
-                retryable = getattr(delivery, "can_retry_uncertain", lambda _: False)
-                if retryable(followup) is True:
-                    followup.status = "ready"
-            if followup.status in {"waiting", "ready"}:
-                followup.checked_at = utc_now()
-            if followup.status == "waiting":
-                try:
-                    job = await transport.get_job(
-                        RemoteTarget(followup.server_id, followup.ssh_host), followup.run_id
-                    )
-                    if job is None:
-                        raise ValueError("registered job was not found on its original server")
-                    followup.error = None
-                    if job.status.terminal:
-                        followup.job = job
-                        followup.outcomes = [
-                            {
-                                **job_outcome(followup.server_id, job.run_id, job),
-                                "project_workspace": followup.workspace,
-                            }
-                        ]
-                        followup.message = completion_message(followup)
-                        followup.status = "ready"
-                except (OSError, RuntimeError, ValueError) as error:
-                    followup.error = str(error)
-                store.save(followup)
-            if (
-                followup.notify == "terminal"
-                and followup.status != "stopped"
-                and followup.job is not None
-            ) or (followup.notify == "analysis_complete" and followup.status == "completed"):
-                _deliver_email(store, followup, send_followup_email)
-            if followup.status != "ready":
-                continue
-            if not followup.resume:
-                followup.status = "observed"
-                store.save(followup)
-                continue
-            followup.status = "sending"
-            store.save(followup)
-            try:
-                result = delivery.send(followup)
-            except OSError as error:
-                followup.status = "ready"  # The child could not start; no message was sent.
-                followup.error = str(error)
-            except (subprocess.TimeoutExpired, DeliveryUncertain) as error:
-                followup.status = "delivery_unknown"
-                followup.error = (
-                    "delivery timed out; acceptance is uncertain"
-                    if isinstance(error, subprocess.TimeoutExpired)
-                    else str(error)
-                )
-            else:
-                if result.returncode == 0:
-                    followup.status = "queued"
-                    followup.queued_at = utc_now()
-                    followup.receipt = result.stdout.strip()
-                    followup.error = None
-                else:
-                    followup.status = "ready"
-                    followup.error = result.stderr.strip() or "Harness rejected the message"
-            store.save(followup)
+        if not enabled():
+            return
+        ids = [followup.id for followup in store.list()]
+    for followup_id in ids:
+        _deliver_event(store, followup_id, delivery, enabled, retryable)
+        _deliver_email(store, followup_id, send_followup_email, enabled)
+
+
+def _deliver_event(
+    store: FollowupStore,
+    followup_id: str,
+    delivery: CompletionDelivery,
+    enabled: Callable[[], bool],
+    retryable: set[str],
+) -> None:
+    from gpuops.followup_delivery import DeliveryUncertain
+
+    with store.lock():
+        if not enabled():
+            return
+        followup = store.get(followup_id)
+        if followup.status != "ready" and not (
+            followup.status == "delivery_unknown" and followup.harness in retryable
+        ):
+            return
+        followup.checked_at = utc_now()
+        followup.status = "sending" if followup.resume else "observed"
+        store.save(followup)
+        if not followup.resume:
+            return
+
+    error_message: str | None = None
+    receipt: str | None = None
+    status: Literal["ready", "queued", "delivery_unknown"] = "ready"
+    try:
+        result = delivery.send(followup)
+    except (OSError, ValueError) as error:
+        # The child could not start or its local configuration could not be read.
+        error_message = str(error)
+    except (subprocess.TimeoutExpired, DeliveryUncertain) as error:
+        status = "delivery_unknown"
+        error_message = (
+            "delivery timed out; acceptance is uncertain"
+            if isinstance(error, subprocess.TimeoutExpired)
+            else str(error)
+        )
+    else:
+        if result.returncode == 0:
+            status = "queued"
+            receipt = result.stdout.strip()
+        else:
+            error_message = result.stderr.strip() or "Harness rejected the message"
+
+    with store.lock():
+        latest = store.get(followup_id)
+        if latest.status == "sending":
+            latest.status = status
+        latest.error = error_message
+        if status == "queued":
+            latest.queued_at = utc_now()
+            latest.receipt = receipt
+        store.save(latest)
 
 
 _EMAIL_RETRY_INITIAL = timedelta(minutes=1)
@@ -339,21 +436,35 @@ def _email_retry_delay(attempts: int) -> timedelta:
 
 
 def _deliver_email(
-    store: FollowupStore, followup: Followup, sender: Callable[[Followup], None]
+    store: FollowupStore,
+    followup_id: str,
+    sender: Callable[[Followup], None],
+    enabled: Callable[[], bool],
 ) -> None:
-    if followup.email_sent_at is not None:
-        return
-    now = utc_now()
-    if followup.email_next_attempt_at is not None and now < followup.email_next_attempt_at:
-        return
+    with store.lock():
+        if not enabled():
+            return
+        followup = store.get(followup_id)
+        now = utc_now()
+        if not pending_email(followup) or (
+            followup.email_next_attempt_at is not None and now < followup.email_next_attempt_at
+        ):
+            return
+
+    error_message = None
     try:
         sender(followup)
     except (OSError, RuntimeError, ValueError) as error:
-        followup.email_attempts += 1
-        followup.email_error = str(error)
-        followup.email_next_attempt_at = now + _email_retry_delay(followup.email_attempts)
-    else:
-        followup.email_sent_at = utc_now()
-        followup.email_error = None
-        followup.email_next_attempt_at = None
-    store.save(followup)
+        error_message = str(error)
+
+    with store.lock():
+        latest = store.get(followup_id)
+        if error_message is None:
+            latest.email_sent_at = utc_now()
+            latest.email_error = None
+            latest.email_next_attempt_at = None
+        else:
+            latest.email_attempts += 1
+            latest.email_error = error_message
+            latest.email_next_attempt_at = now + _email_retry_delay(latest.email_attempts)
+        store.save(latest)

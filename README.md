@@ -254,12 +254,16 @@ Desktop and email delivery are tracked independently. A failed channel retries
 on subsequent checks while the event remains relevant. Use
 `gpuops alerts enable --no-email` to return to desktop-only alerts.
 
-Use `gpuops alerts status` (or `gpuops alerts status --json`) to see the latest
-check and delivery errors, and `gpuops alerts disable` to turn both channels off.
-Checks resume after you
-log in; your Mac must be awake and able to reach the servers. Alerts require no
-changes to the remote Workers and do not restart them. See
-[Worker alert email](docs/NOTIFICATIONS.md#worker-alert-email-on-macos) for details.
+Use `gpuops alerts status --json` to see the latest alert observations and
+delivery errors. `gpuops alerts disable` pauses both alert channels without
+pausing session follow-ups. The two features share a macOS checker that runs
+every 60 seconds while needed. Use `gpuops background status --json` to see
+which features are enabled and the last round's SSH calls and errors.
+
+Checks resume after you log in; your Mac must be awake and able to reach
+the servers. The checker reads Worker state without restarting Workers.
+See [Worker alert email](docs/NOTIFICATIONS.md#worker-alert-email-on-macos)
+for details.
 
 ## Operating boundary
 

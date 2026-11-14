@@ -6,22 +6,21 @@ import argparse
 import asyncio
 import json
 import os
-import plistlib
 import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from gpuops.cli_errors import error_payload, print_error
 from gpuops.config import select_client_targets
 from gpuops.control import SubmissionJournal
 from gpuops.file_io import atomic_write_bytes
-from gpuops.followups import CodexQueue, Followup, FollowupStore, check_followups
-from gpuops.transport import SshWorkerTransport
+from gpuops.followups import Followup, FollowupStore, pending_email
 
-LABEL = "io.gpuops.followups"
+if TYPE_CHECKING:
+    from gpuops.background import Background
 
 
 def add_parser(subparsers: argparse._SubParsersAction) -> None:
@@ -57,11 +56,11 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         "acknowledge",
         "complete",
         "list",
+        "enable",
         "disable",
         "check",
         "capabilities",
         "schema",
-        "_check",
     ):
         command = commands.add_parser(name)
         if name in {"show", "stop", "retry", "acknowledge", "complete"}:
@@ -73,11 +72,11 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         command.add_argument("--json", action="store_true", dest="as_json")
 
 
-def enable(root: Path, *, harness: str | None = "codex-desktop") -> None:
+def prepare_delivery(root: Path, *, harness: str | None = "codex-desktop") -> None:
     if sys.platform != "darwin":
         raise ValueError("automatic follow-up scheduling currently requires macOS")
-    executable = shutil.which("codex")
     if harness == "codex-desktop":
+        executable = shutil.which("codex")
         if executable is None:
             raise ValueError("install a Codex CLI with the queue command first")
         # Codex prints its top-level help with status 0 for unknown subcommands.
@@ -86,12 +85,6 @@ def enable(root: Path, *, harness: str | None = "codex-desktop") -> None:
         )
         if result.returncode or not _supports_queue(result.stdout):
             raise ValueError("the installed Codex CLI does not support queue")
-    elif harness is not None:
-        from gpuops.followup_delivery import load_adapters
-
-        if harness not in load_adapters():
-            raise ValueError(f"configure the {harness!r} Harness adapter before registering")
-    if executable:
         settings = {
             "executable": executable,
             "codex_home": str(
@@ -99,45 +92,18 @@ def enable(root: Path, *, harness: str | None = "codex-desktop") -> None:
             ),
         }
         atomic_write_bytes(root / "codex.json", json.dumps(settings).encode())
-    plist = Path.home() / "Library/LaunchAgents" / f"{LABEL}.plist"
-    service = f"gui/{os.getuid()}/{LABEL}"
-    config = plistlib.dumps(
-        {
-            "Label": LABEL,
-            "ProgramArguments": [sys.executable, "-m", "gpuops", "followup", "_check"],
-            "EnvironmentVariables": {
-                # npm's codex entry point needs its sibling node under launchd.
-                "PATH": f"{Path(executable).parent if executable else Path.home() / '.local/bin'}:"
-                "/opt/homebrew/bin:/usr/local/bin:"
-                "/usr/bin:/bin:/usr/sbin:/sbin",
-            },
-            "RunAtLoad": True,
-            "StartInterval": 30,
-            "LimitLoadToSessionType": "Aqua",
-        }
-    )
-    loaded = subprocess.run(["launchctl", "print", service], capture_output=True).returncode == 0
-    if loaded and plist.exists() and plist.read_bytes() == config:
-        return
-    if loaded:
-        subprocess.run(
-            ["launchctl", "bootout", service], check=True, capture_output=True, timeout=15
-        )
-    plist.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_bytes(plist, config)
-    subprocess.run(
-        ["launchctl", "bootstrap", f"gui/{os.getuid()}", str(plist)],
-        check=True,
-        capture_output=True,
-        timeout=15,
-    )
+    elif harness is not None:
+        from gpuops.followup_delivery import load_adapters
+
+        if harness not in load_adapters():
+            raise ValueError(f"configure the {harness!r} Harness adapter before registering")
 
 
 def _supports_queue(help_text: str) -> bool:
     return "Usage: codex queue" in help_text and "--thread" in help_text
 
 
-def register(args: argparse.Namespace, store: FollowupStore, root: Path) -> Followup:
+def register(args: argparse.Namespace, store: FollowupStore, background: Background) -> Followup:
     thread_id = args.thread or os.environ.get("CODEX_THREAD_ID")
     if not thread_id:
         raise ValueError("run from the original Codex chat, or provide its --thread ID")
@@ -164,26 +130,33 @@ def register(args: argparse.Namespace, store: FollowupStore, root: Path) -> Foll
         workspace=str(workspace),
         action=args.action,
     )
-    enable(root)
-    return store.add(followup)
+    prepare_delivery(background.followup_root)
+    return store.add(followup, on_registered=lambda: background.enable_followups_locked(store))
 
 
 def run_command(args: argparse.Namespace) -> int:
-    root = Path.home() / ".local/state/gpuops/followups"
-    store = FollowupStore(root / "records")
+    from gpuops.background import PAUSED_MESSAGE, Background
+
+    background = Background()
+    store = background.event_store()
+    root = background.followup_root
     result: dict[str, Any]
     try:
         action = args.followup_command
-        if action in {"_check", "check"}:
-            asyncio.run(check(root, store))
-            if action == "_check":
-                return 0
-            result = {"checked": True}
+        if action == "check":
+            result = asyncio.run(background.run_round(followup_only=True))
+            if result.get("reason") == "followups_paused":
+                result["message"] = PAUSED_MESSAGE
         elif action == "add":
-            result = register(args, store, root).model_dump(mode="json")
+            result = register(args, store, background).model_dump(mode="json")
         elif action == "register":
-            result = register_group(args.file, store, root)
-        elif action in {"configure", "adapter", "capabilities", "schema"}:
+            result = register_group(args.file, store, background)
+        elif action == "adapter":
+            with store.lock():
+                result = configure_or_describe(args)
+                if background.followups_enabled():
+                    background.sync_locked(store)
+        elif action in {"configure", "capabilities", "schema"}:
             result = configure_or_describe(args)
         elif action == "list":
             from gpuops.followup_groups import GroupStore, summarize_group
@@ -197,18 +170,26 @@ def run_command(args: argparse.Namespace) -> int:
                 "groups": [summarize_group(group, store) for group in groups],
                 "invalid_records": [*invalid, *invalid_groups],
             }
-        elif action == "disable":
-            subprocess.run(
-                ["launchctl", "bootout", f"gui/{os.getuid()}/{LABEL}"],
-                capture_output=True,
-                timeout=15,
-            )
-            (Path.home() / "Library/LaunchAgents" / f"{LABEL}.plist").unlink(missing_ok=True)
-            result = {"enabled": False}
+        elif action in {"enable", "disable"}:
+            enabled = action == "enable"
+            if enabled and sys.platform != "darwin":
+                raise ValueError("automatic follow-up scheduling currently requires macOS")
+            with store.lock():
+                background.set_switch_locked("followups", enabled)
+                background.sync_locked(store)
+            result = {"enabled": enabled}
         elif action in {"acknowledge", "complete"}:
-            result = store.acknowledge(
+            followup = store.acknowledge(
                 args.followup_id, summary=getattr(args, "summary", None), session_id=args.session
-            ).model_dump(mode="json")
+            )
+            result = followup.model_dump(mode="json")
+            if (
+                action == "complete"
+                and followup.notify == "analysis_complete"
+                and pending_email(followup)
+            ):
+                with store.lock():
+                    _schedule_existing_work(background, store, result)
         elif action in {"show", "stop", "retry"}:
             from gpuops.followup_groups import GroupStore, stop_group, summarize_group
 
@@ -222,6 +203,9 @@ def run_command(args: argparse.Namespace) -> int:
                     if action == "stop"
                     else summarize_group(group_store.get(args.followup_id), store)
                 )
+                if action == "stop":
+                    with store.lock():
+                        background.sync_locked(store)
                 print(json.dumps({"ok": True, **result}, ensure_ascii=False, indent=2))
                 return 0
             with store.lock():
@@ -252,6 +236,10 @@ def run_command(args: argparse.Namespace) -> int:
                     followup.status = "stopped"
                     store.save(followup)
                 result = followup.model_dump(mode="json")
+                if action == "retry":
+                    _schedule_existing_work(background, store, result)
+                elif action == "stop":
+                    background.sync_locked(store)
     except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
         print_error(error_payload(error), as_json=args.as_json)
         return 1
@@ -259,21 +247,18 @@ def run_command(args: argparse.Namespace) -> int:
     return 0
 
 
-async def check(root: Path, store: FollowupStore) -> None:
-    from gpuops.followup_delivery import DeliveryRouter
-    from gpuops.followup_groups import GroupStore, check_groups
+def _schedule_existing_work(
+    background: Background, store: FollowupStore, result: dict[str, Any]
+) -> None:
+    from gpuops.background import PAUSED_MESSAGE
 
-    try:
-        settings = json.loads((root / "codex.json").read_bytes())
-    except FileNotFoundError:
-        settings = None
-    delivery = DeliveryRouter(CodexQueue(**settings) if settings else None)
-    transport = SshWorkerTransport(timeout_seconds=10)
-    await check_groups(GroupStore(root / "groups"), store, transport)
-    await check_followups(store, transport, delivery)
+    if background.followups_enabled():
+        background.sync_locked(store)
+    else:
+        result["background_message"] = PAUSED_MESSAGE
 
 
-def register_group(file: str, store: FollowupStore, root: Path) -> dict[str, Any]:
+def register_group(file: str, store: FollowupStore, background: Background) -> dict[str, Any]:
     from gpuops.followup_delivery import read_email_settings
     from gpuops.followup_groups import GroupStore, RemoteJob, create_group, summarize_group
     from gpuops.followup_registration import FollowupRequest, resolve_job, resolve_target
@@ -287,9 +272,11 @@ def register_group(file: str, store: FollowupStore, root: Path) -> dict[str, Any
         members.append(RemoteJob(run_id=reference.run_id, server_id=server_id, ssh_host=ssh_host))
     if request.notify != "none" and read_email_settings() is None:
         raise ValueError("configure follow-up email before registering an email notification")
-    enable(root, harness=request.target.harness if request.resume else None)
+    prepare_delivery(
+        background.followup_root, harness=request.target.harness if request.resume else None
+    )
     group = create_group(
-        GroupStore(root / "groups"),
+        GroupStore(background.followup_root / "groups"),
         store,
         members,
         thread_id=thread_id,
@@ -301,6 +288,7 @@ def register_group(file: str, store: FollowupStore, root: Path) -> dict[str, Any
         resume=request.resume,
         context=request.context,
         name=request.name,
+        on_registered=lambda: background.enable_followups_locked(store),
     )
     return summarize_group(group, store)
 

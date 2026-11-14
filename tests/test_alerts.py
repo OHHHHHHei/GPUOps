@@ -1,10 +1,11 @@
+import asyncio
 import json
 import stat
 from pathlib import Path
 
 import pytest
 
-from gpuops import alerts
+from gpuops import alerts, background
 from gpuops.cli import main
 from gpuops.config import ServerTarget
 from gpuops.notifications.config import SMTPSettings
@@ -34,36 +35,47 @@ def settings():
 
 @pytest.fixture
 def fleet(tmp_path, monkeypatch, settings):
+    monkeypatch.setenv("HOME", str(tmp_path))
     alerts._email_path().parent.mkdir()
     alerts._email_path().write_text(settings.model_dump_json())
     desktop, emails = [], []
-    row = {"server_id": "gpu01", "online": True, "result": {"ready": True}}
+    row = {"process": "running", "ready": True}
 
-    async def collect(_transport, targets, action):
-        assert [target.server_id for target in targets] == ["gpu01", "gpu02"]
-        assert action == "status"
-        return [row, {"server_id": "gpu02", "online": True, "result": {"ready": True}}]
+    class Transport:
+        def __init__(self, *, timeout_seconds):
+            assert timeout_seconds == 10
+
+        async def watch(self, target, run_ids):
+            assert run_ids == []
+            if target.server_id == "gpu01" and row["process"] == "unknown":
+                raise OSError("offline")
+            worker = row if target.server_id == "gpu01" else {"process": "running", "ready": True}
+            return {"server_id": target.server_id, "worker": worker, "jobs": {}}
 
     monkeypatch.setattr(
-        alerts,
+        background,
         "select_targets",
         lambda: [
             ServerTarget("gpu01", "Server 1", "one"),
             ServerTarget("gpu02", "Server 2", "two"),
         ],
     )
-    monkeypatch.setattr(alerts, "fleet_worker_action", collect)
+    monkeypatch.setattr(background, "SshWorkerTransport", Transport)
+    bg = background.Background()
+    with bg.event_store().lock():
+        bg.set_switch_locked("alerts", True)
     monkeypatch.setattr(alerts, "_notify", lambda title, text: desktop.append((title, text)))
     monkeypatch.setattr(alerts, "send_mail", lambda _settings, message: emails.append(message))
 
     def poll(status):
-        row["online"] = status != "unknown"
-        row["result"] = {
-            "status": "running" if status in {"ready", "not_ready"} else status,
-            "ready": status == "ready",
-            "heartbeat": {"heartbeat_at": "2026-11-09T00:00:00Z", "last_tick_error": "disk full"},
-        }
-        return alerts._check(tmp_path / "alerts.json")
+        row.update(
+            process="running" if status in {"ready", "not_ready"} else status,
+            ready=status == "ready",
+            heartbeat_at="2026-11-09T00:00:00Z",
+            last_tick_error="disk full",
+        )
+        asyncio.run(bg.run_round())
+        return alerts._read_state(bg.alert_state)
 
     return poll, desktop, emails
 
@@ -93,7 +105,7 @@ def test_stop_and_recovery_are_persisted_and_deduplicated(fleet, tmp_path, email
         assert "Detected at:" in body and "2026-11-09T00:00:00Z" in body
         assert "disk full" in body and "does not imply" in body
     assert state["servers"][0]["email_stop_notified"] is False
-    assert stat.S_IMODE((tmp_path / "alerts.json").stat().st_mode) == 0o600
+    assert stat.S_IMODE(background.Background().alert_state.stat().st_mode) == 0o600
 
 
 @pytest.mark.parametrize("channel", ["desktop", "email"])
@@ -151,8 +163,8 @@ def test_recovery_does_not_send_an_expired_failed_stop_email(fleet, monkeypatch)
 
 def test_legacy_desktop_state_does_not_suppress_new_email_channel(fleet, tmp_path):
     poll, desktop, emails = fleet
-    path = tmp_path / "alerts.json"
-    path.write_text(json.dumps({"servers": [{"server_id": "gpu01", "stop_notified": True}]}))
+    path = background.Background().alert_state
+    alerts._save_state(path, {"servers": [{"server_id": "gpu01", "stop_notified": True}]})
     poll("stopped")
     assert not desktop and len(emails) == 1
 
@@ -180,7 +192,7 @@ def local_app(tmp_path, monkeypatch):
         calls.append(args)
         return args[0] != "print"
 
-    monkeypatch.setattr(alerts, "_launchctl", launchctl)
+    monkeypatch.setattr(background, "_launchctl", launchctl)
     return calls
 
 

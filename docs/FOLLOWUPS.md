@@ -77,11 +77,10 @@ target. Repeating the same definition returns the existing IDs. Changing its
 members, action, mode, notification, resume flag, or context is rejected. A
 stopped named group needs a new name.
 
-The first registration enables the macOS LaunchAgent that checks every 30
-seconds. Automatic scheduling remains macOS-only, and registration currently
-calls that macOS setup even though `gpuops followup check --json` is public and
-can manually run one check. Registration therefore does not yet provide a
-Linux-only manual-scheduling workflow.
+Registration enables follow-ups and starts the shared macOS LaunchAgent,
+`io.gpuops.background`, when work is pending. It checks every 60 seconds and
+shares each server's `watch` query with Worker alerts. Registration and
+automatic scheduling require macOS.
 
 ## Group modes and terminal results
 
@@ -105,6 +104,11 @@ gpuops followup show GROUP_ID --json
 gpuops followup show EVENT_ID --json
 gpuops followup check --json
 ```
+
+`followup check` runs one follow-up round with the same switch and lock as the
+scheduled checker. It skips Worker alerts and exits if another round is already
+running. Use `gpuops background status --json` for the last round's elapsed time,
+SSH calls, queried servers and jobs, pending work, and errors.
 
 `show` and `stop` accept either a group ID or an event ID. `retry`,
 `acknowledge`, and `complete` operate on event IDs. Stopping a group prevents
@@ -324,8 +328,12 @@ Private controller state is stored under
 under `~/.config/gpuops/`. It is not copied to Workers or committed with the
 research project.
 
-`gpuops followup disable` unloads the macOS checker and retains all records; a
-later registration enables it again. Neither follow-up stop nor disable cancels
-an experiment. Research Pipeline and other project systems remain separate:
+`gpuops followup disable` pauses new follow-up deliveries and retains all
+records. A send already in progress can finish. Use `gpuops followup enable`
+or register another follow-up to resume. `retry` and `complete` record the
+change while paused and leave delivery for when follow-ups resume. Worker
+alerts have their own switch; the shared checker unloads when alerts are off
+and there is no enabled follow-up work. Neither follow-up stop nor disable
+cancels an experiment. Research Pipeline and other project systems remain separate:
 they may supply intent and consume results, but GPUOps owns only observation,
 routing, delivery state, and explicit ACK records.

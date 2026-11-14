@@ -80,8 +80,6 @@ Use `gpuops submit job.json --email off --json` to suppress the server's
 completion email for that job. The same policy can be saved in the manifest as
 `"metadata": {"gpuops.email": "off"}`. Omit it, or use `default`, to retain the
 server's existing notification policy. Other jobs and Worker alerts are unaffected.
-Older Workers that cannot honor this policy reject `off` before submission;
-upgrade the server's GPUOps installation first.
 
 [Session follow-ups](FOLLOWUPS.md) provide separate client-side group emails at
 `terminal` or `analysis_complete`. For “analyze the whole group, then email me,”

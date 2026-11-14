@@ -66,7 +66,7 @@ gpuops server list --json
 gpuops status --json
 ```
 
-`server add` 会复用已就绪的安装、启动已停止的 Worker，或从本地 GPUOps 安装包部署缺失的 Worker。只有确认 Worker 就绪后，才会写入控制端的服务器注册表。复用已有安装不会自动升级它。
+`server add` 会复用版本相同且已就绪的安装、启动已停止的 Worker；服务器没有安装或版本不同时，从本地 GPUOps 安装包部署。只有确认 Worker 就绪后，才会写入控制端的服务器注册表。
 
 新服务器默认以 SSH 别名作为 ID；已有 GPUOps 安装会保留原有身份。任务清单中应使用返回的 `server.id`。首次安装的注册表为空，不包含预设服务器。接入操作不会复制实验代码、环境或数据，也不会自动安装 Agent skill。
 

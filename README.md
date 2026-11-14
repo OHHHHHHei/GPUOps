@@ -69,9 +69,10 @@ gpuops server list --json
 gpuops status --json
 ```
 
-`server add` reuses a ready installation, starts a stopped Worker, or installs a
-missing Worker from the local GPUOps package. It waits for readiness before
-adding a registry entry. Reusing a ready installation does not upgrade it. The
+`server add` reuses a ready installation of the same release, starts a stopped
+Worker, and installs the local GPUOps package when the server has no installation
+or runs a different release. It waits for readiness before adding a registry
+entry. The
 alias becomes the server ID unless an existing installation already has an
 identity; use the returned `server.id` in job manifests. A fresh registry is
 empty. Registration does not install an Agent skill or copy your experiment

@@ -166,8 +166,7 @@ SMTP 配置示例、状态查询和关闭方法见[任务结束邮件文档](doc
 
 如果某个任务只希望在后续分析完成后发人类邮件，可先运行
 `gpuops submit job.json --email off --json`，再在后续登记中选择
-`analysis_complete`。该单任务覆盖要求远端 Worker 已支持邮件策略能力；旧版
-Worker 会在入队前拒绝，需要先升级服务器上的 GPUOps。
+`analysis_complete`。Mac、服务器 CLI 和 Worker 需使用同一个发布版本。
 
 ## 实验组后续动作（实验性）
 
@@ -209,6 +208,10 @@ gpuops alerts status --json
 桌面通知和邮件分别记录投递结果，失败的渠道在后续检查中重试；如果尚未发出停止邮件就已恢复，不再补发过期告警。`alerts test` 的 `email_accepted: true` 表示邮件服务器已接收，还需在邮箱确认到达。
 
 只需桌面通知时运行 `gpuops alerts enable --no-email`；`gpuops alerts disable` 关闭两种提醒，保留邮箱配置供下次启用。Mac 必须保持唤醒并能访问服务器和邮箱服务。该功能不重启远端 Worker；Worker 停止也不代表已启动的实验停止。
+
+Worker 提醒和会话接续共用一个后台检查器，每 60 秒按服务器批量查询；同一任务出现在多个任务组时只查一次。提醒关闭且没有接续待办时，检查器会自动卸载。`gpuops background status --json` 显示开关、上一轮耗时、SSH 次数和错误。`gpuops followup disable` / `enable` 可独立暂停、恢复会话接续，不影响 Worker 提醒；等待期间不调用模型。
+
+从 0.3 升级需先停服务、转换保存的记录，再统一启用 0.4。具体步骤见[一次性升级手册](docs/UPGRADE_0_4.md)。
 
 ## 运行边界与维护
 

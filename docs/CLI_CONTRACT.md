@@ -80,8 +80,8 @@ History suppresses `next_cursor` on partial results to avoid skipping records.
 Raw GPU telemetry and human messages may gain device-specific fields;
 Agents should use documented state/readiness and job fields for decisions.
 
-On macOS, `alerts status --json` reports whether the local poller is loaded
-(`enabled`), the last completed check (`checked_at`, nullable), and the last
+On macOS, `alerts status --json` reports the alert switch (`enabled`), the
+last completed check (`checked_at`, nullable), and the last
 observations (`servers`). Each observation has a `server_id` and a `status`:
 `ready`, `stopped`, `not_ready`, or `unknown` when the status query failed.
 Check `checked_at` before treating the observations as current. This command
@@ -147,9 +147,14 @@ Harness delivery. Non-`none` registration requires client-side follow-up SMTP
 settings installed with `followup configure --email-config FILE --json` (or the
 local Worker-alert SMTP fallback).
 
-Registration enables the macOS LaunchAgent. `followup check --json` publicly
-runs one check, but registration still requires macOS; this is not yet a public
-Linux manual-scheduling workflow. `followup capabilities --json` returns the
+Registration enables follow-ups and loads the shared macOS checker when work
+is pending. `followup disable` pauses further claims and mail attempts while
+retaining records; an already-started send may finish. `followup enable`
+resumes pending work. `retry` and `complete` preserve the switch: when paused,
+their result explains that `followup enable` is needed to process pending work.
+`followup check --json` runs a follow-up-only round, honors this switch, and
+returns `round_in_progress` if the shared nonblocking round lock is held.
+Registration still requires macOS. `followup capabilities --json` returns the
 registration/event API versions, modes, notification phases, adapter
 capabilities, email configuration state, `background_platform`, and
 `codex_unloaded_session_wakeup: false`. `followup schema --json` returns the
@@ -265,3 +270,12 @@ background checker. It returns Worker readiness and full records for at most
 checks. Missing records are null; unreadable records carry an item-level error.
 Malformed run IDs reject the request. Worker readiness is reported separately
 from saved task state, so a stopped Worker does not hide completed tasks.
+
+`gpuops background status --json` only reads local state and launchd status.
+It reports independent alert/follow-up switches, whether the checker is loaded,
+and the last round's time, duration, SSH calls, server/job counts, pending work
+and errors. `io.gpuops.background` runs every 60 seconds while alerts are enabled
+or enabled follow-ups have work to do. With alerts disabled and no follow-up
+work, it unloads itself. Pending delivery or mail alone does not query servers.
+Each round deduplicates jobs and shares one `watch` request per server (up to
+500 jobs; larger sets use more batches). Ordinary polling never invokes a model.

@@ -40,7 +40,7 @@ uv sync --all-extras --frozen
 uv run gpuops version --json
 ```
 
-使用源码环境时，在下文的 `gpuops` 命令前加上 `uv run`。
+使用源码环境时，在下文的 `gpuops` 命令前加上 `uv run`。从 0.3 升级时，按[一次性升级手册](docs/UPGRADE_0_4.md)操作。
 
 ## 接入服务器
 
@@ -66,11 +66,9 @@ gpuops server list --json
 gpuops status --json
 ```
 
-`server add` 会复用版本相同且已就绪的安装、启动已停止的 Worker；服务器没有安装或版本不同时，从本地 GPUOps 安装包部署。只有确认 Worker 就绪后，才会写入控制端的服务器注册表。
+`server add` 会复用版本相同且已就绪的安装、启动已停止的 Worker；服务器没有安装或版本不同时，从本地 GPUOps 安装包部署。确认 Worker 就绪后，才会写入控制端的服务器注册表。新服务器默认以 SSH 别名作为 ID；已有 GPUOps 安装会保留原有身份。任务清单中应使用返回的 `server.id`。
 
-新服务器默认以 SSH 别名作为 ID；已有 GPUOps 安装会保留原有身份。任务清单中应使用返回的 `server.id`。首次安装的注册表为空，不包含预设服务器。接入操作不会复制实验代码、环境或数据，也不会自动安装 Agent skill。
-
-`status` 分别报告 GPU 采样状态和 `worker.ready`。即使 GPU 采样暂时不可用，已就绪的 Worker 仍可接收指定服务器的任务；任务会留在队列中，等待可靠的 GPU 状态后再启动。仅凭监控命令退出码为零，不能判断调度是否就绪。
+`status` 分别报告 GPU 采样状态和 `worker.ready`。即使 GPU 采样暂时不可用，已就绪的 Worker 仍可接收指定服务器的任务；任务会留在队列中，等待可靠的 GPU 状态后再启动。
 
 ## 提交实验
 
@@ -121,23 +119,16 @@ gpuops reconcile --list --json
 
 任何能调用终端并解析 JSON 的 Agent 都可以使用 GPUOps。将 [Agent 使用指南](docs/AGENT_GUIDE.md) 和 [CLI 接口约定](docs/CLI_CONTRACT.md) 提供给它即可，不依赖特定 Agent 厂商、SDK 或 MCP 服务。
 
-Codex 用户可以选择在当前机器上安装随包提供的 skill：
+Codex 用户可以选择在当前机器上，或已注册服务器的 SSH 账户中，安装随包提供的 skill：
 
 ```bash
 gpuops skill install --json
-```
-
-也可以安装到已注册服务器的 SSH 账户中：
-
-```bash
 gpuops skill install --server gpu-server --json
 ```
 
-默认安装位置为目标账户下的 `~/.codex/skills/gpu-infra`。如果该账户的命令环境设置了 `CODEX_HOME`，则使用 `$CODEX_HOME/skills/gpu-infra`。远端 skill 安装是可选操作，使用前需先注册服务器。
+安装位置为目标账户下的 `~/.codex/skills/gpu-infra`；如果该账户设置了 `CODEX_HOME`，则为 `$CODEX_HOME/skills/gpu-infra`。
 
-Agent 也可以直接部署在服务器上。只要与 Worker 使用同一个 Unix 账户，就能从任意实验目录调用 `~/.local/bin/gpuops`；访问当前服务器时直接本地执行，无需源码目录，也无需再 SSH 回自己。
-
-旧版服务器 CLI 可能没有 `version` 或 `server list` 命令，但仍可使用原有的 `status`、`queue` 和 `submit`。版本查询及安装维护可从控制端完成。
+Agent 也可以直接运行在服务器上。只要与 Worker 使用同一个 Unix 账户，就能从任意实验目录调用 `~/.local/bin/gpuops`，无需源码目录，也无需再 SSH 回这台服务器。
 
 ## Web 控制台
 
@@ -145,13 +136,9 @@ Agent 也可以直接部署在服务器上。只要与 Worker 使用同一个 Un
 gpuops web
 ```
 
-打开 [http://127.0.0.1:8787](http://127.0.0.1:8787)，即可查看物理 GPU 编号、进程归属、当前任务、分页历史、任务状态说明和有长度上限的日志。运行 `gpuops web --demo` 可以查看固定的演示数据。
+打开 [http://127.0.0.1:8787](http://127.0.0.1:8787)，即可查看物理 GPU 编号、进程归属、当前任务、分页历史、任务状态说明和有长度上限的日志。运行 `gpuops web --demo` 可以查看固定的演示数据。Web 服务只允许绑定回环地址；如需远程访问，请通过可信的隧道连接。
 
-Web 服务只允许绑定回环地址；如需远程访问，请通过可信的隧道连接。
-
-结束时间估计（ETA）是可选展示能力。可读取的训练日志可以提供阶段或训练进度，也可以用 `schedule.expected_duration` 为受管任务提供手动估计。对于新编写的训练代码，[结构化进度协议](docs/PROGRESS.md) 提供了简短的标准输出格式，以及不依赖额外包的示例输出函数。
-
-日志缺失、过期或信息不足时，ETA 保持未知。估计时间不会预留 GPU，也不参与调度决策。
+结束时间估计（ETA）是可选展示能力。可读取的训练日志可以提供阶段或训练进度，也可以用 `schedule.expected_duration` 为受管任务提供手动估计。对于新编写的训练代码，[结构化进度协议](docs/PROGRESS.md) 提供了简短的标准输出格式，以及不依赖额外包的示例输出函数。日志缺失、过期或信息不足时，ETA 保持未知。
 
 ## 任务结束邮件
 
@@ -164,41 +151,25 @@ gpuops notify test --server gpu-server --json
 
 SMTP 配置示例、状态查询和关闭方法见[任务结束邮件文档](docs/NOTIFICATIONS.md)。
 
-如果某个任务只希望在后续分析完成后发人类邮件，可先运行
-`gpuops submit job.json --email off --json`，再在后续登记中选择
-`analysis_complete`。Mac、服务器 CLI 和 Worker 需使用同一个发布版本。
+如果某个任务只希望在后续分析完成后发人类邮件，可先运行 `gpuops submit job.json --email off --json`，再在跟进登记中选择 `analysis_complete`。
 
-## 实验组后续动作（实验性）
+## 回到原聊天继续分析（实验性）
 
-原有单任务 Codex 命令仍可使用：
+登记的实验结束后，GPUOps 可以回到当初登记它们的 Codex Desktop、Claude Code Desktop 或 Antigravity 聊天。原聊天沿用已有上下文，读取保存的结果，完成约定的分析，并在原聊天里汇报。
 
-```bash
-gpuops followup add RUN_ID --action '读取已保存的指标，更新研究记录，并在当前聊天汇报。' --json
-```
-
-跨服务器任务组可编辑
-[`examples/followup.example.json`](examples/followup.example.json)，然后运行：
+编辑 [`examples/followup.example.json`](examples/followup.example.json)，在原聊天中登记：
 
 ```bash
 gpuops followup register examples/followup.example.json --json
 ```
 
-`per_job` 在每个成员成功、失败或取消时分别产生稳定事件；`all_terminal`
-等待全部成员进入终态，再产生一个聚合事件。Harness 接续与人类邮件（`none`、
-`terminal`、`analysis_complete`）相互独立。原 Agent 提供动作和上下文，GPUOps
-只负责观察与路由，不负责形成研究判断。
+GPUOps 会自动识别客户端和会话，文件里不需要写 `target`。任务可以分布在不同服务器上。`per_job` 在每个成员成功、失败或取消时分别产生一个事件；`all_terminal` 等全部成员结束后产生一个汇总事件。回到聊天和人类邮件（`none`、`terminal`、`analysis_complete`）分别选择。登记的 Agent 提供动作和上下文，GPUOps 负责观察任务和投递事件。
 
-在原聊天里登记时可以省略 `target`，GPUOps 会自动识别 Codex Desktop、
-Claude Code Desktop 或 Antigravity 的会话。三者复用现有统一检查器，均已观察到
-原桌面聊天自动接续并显示分析结果。Codex 仍要求原聊天已加载；Claude 和
-Antigravity 依赖客户端内部发现接口，重启等场景的验收范围分别记录。
-已验证版本、适用边界、接收/完成确认和邮件配置见[后续动作文档](docs/FOLLOWUPS.md)。
+在 Codex 中，单个任务可以用快捷命令 `gpuops followup add RUN_ID --action '...' --json`。已验证的客户端版本、接收与完成确认、邮件配置和外部适配器见[跟进文档](docs/FOLLOWUPS.md)。
 
 ## Mac 上的 Worker 停止提醒
 
-Mac 每分钟检查已注册服务器的 Worker。确认停止后通知一次，恢复就绪后再通知一次；SSH 暂时不通只记为状态未知，不发送停止告警。Web 关闭后仍会检查。
-
-启用桌面通知，并复用任务结束邮件的 SMTP 配置来接收邮件：
+Worker 停止时发一次桌面通知，恢复就绪后再发一次；SSH 暂时不通只记为状态未知，不发送停止通知。启用桌面通知，并复用任务结束邮件的 SMTP 配置来接收邮件：
 
 ```bash
 gpuops alerts enable --email-config smtp.json
@@ -206,38 +177,36 @@ gpuops alerts test --json
 gpuops alerts status --json
 ```
 
-桌面通知和邮件分别记录投递结果，失败的渠道在后续检查中重试；如果尚未发出停止邮件就已恢复，不再补发过期告警。`alerts test` 的 `email_accepted: true` 表示邮件服务器已接收，还需在邮箱确认到达。
+桌面通知和邮件分别记录投递结果，失败的渠道在后续检查中重试；如果尚未发出停止邮件 Worker 就已恢复，不再补发过期告警。只需桌面通知时运行 `gpuops alerts enable --no-email`；`gpuops alerts disable` 关闭两种提醒，保留邮箱配置供下次启用。详见 [Worker 提醒邮件](docs/NOTIFICATIONS.md#worker-alert-email-on-macos)。
 
-只需桌面通知时运行 `gpuops alerts enable --no-email`；`gpuops alerts disable` 关闭两种提醒，保留邮箱配置供下次启用。Mac 必须保持唤醒并能访问服务器和邮箱服务。该功能不重启远端 Worker；Worker 停止也不代表已启动的实验停止。
+## 后台检查器
 
-Worker 提醒和会话接续共用一个后台检查器，每 60 秒按服务器批量查询；同一任务出现在多个任务组时只查一次。提醒关闭且没有接续待办时，检查器会自动卸载。`gpuops background status --json` 显示开关、上一轮耗时、SSH 次数和错误。`gpuops followup disable` / `enable` 可独立暂停、恢复会话接续，不影响 Worker 提醒；等待期间不调用模型。
+Worker 提醒和聊天跟进共用一个 macOS 后台检查器。任一功能有待处理工作时，它每 60 秒运行一轮，每轮把同一台服务器的查询合并为一次 SSH 调用；两者都不需要时自动卸载。检查器在你登录后运行，Mac 需要保持唤醒并能访问服务器。
 
-从 0.3 升级需先停服务、转换保存的记录，再统一启用 0.4。具体步骤见[一次性升级手册](docs/UPGRADE_0_4.md)。
+`gpuops background status --json` 显示功能开关、上一轮耗时、SSH 次数和错误。`gpuops alerts disable` 和 `gpuops followup disable` 分别暂停各自的功能，互不影响。
 
 ## 运行边界与维护
 
 GPUOps 在每台服务器的同一个可信 Unix 账户内协调任务。Worker 会避开可见的外部 GPU 进程，包括其他用户的任务；资源租约只协调该账户下的 GPUOps 作业，无法阻止其他用户或绕过 GPUOps 的程序占用显卡。取消操作只会向身份确认过的受管进程发送信号。
 
-分配前会通过两次采样确认 GPU 空闲，并按设备 UUID 启动实验。故障设备会自动重试检测，恢复后重新参与分配。GPUOps 无法修复 NVIDIA 驱动，也无法隔离驱动内部共享锁造成的阻塞。GPU 状态统一来自 Worker 的共享采样，重复查询不会额外启动探测。
+分配前会通过两次采样确认 GPU 空闲，并按设备 UUID 启动实验。故障设备会自动重试检测，恢复后重新参与分配。GPU 状态统一来自 Worker 的共享采样，重复查询不会额外启动探测。
 
-Worker 不需要 Docker、`sudo`、systemd 或服务器端 HTTP 服务。目前服务器重启后仍需显式运行 `gpuops fleet start --json`；停止 Worker 会保留实验监督进程继续运行。
+Worker 不需要 Docker、`sudo`、systemd 或服务器端 HTTP 服务。服务器重启后需要运行 `gpuops fleet start --json`；停止 Worker 时，已启动的实验会继续运行。每台服务器上，GPUOps 自有的安装文件、缓存、持久化状态和日志合计不超过 1 GiB；实验输出和数据集不计入其中。
 
-每台服务器上，GPUOps 自有的安装文件、缓存、持久化状态和日志采用合计 1 GiB 的预算。实验输出和数据集由实验项目自行管理。
-
-维护时使用 `gpuops deploy status|install|rollback|uninstall` 和 `gpuops fleet start|stop|status`。例如，升级已注册服务器：
+控制端、服务器 CLI 和运行中的 Worker 使用同一个发布版本；版本不同时会返回 `version_mismatch`。升级已注册服务器：
 
 ```bash
 gpuops deploy install --server gpu-server --json
 gpuops deploy status --server gpu-server --json
 ```
 
-受管任务全部结束后，可移除服务器：
+其他维护命令包括 `gpuops deploy rollback|uninstall` 和 `gpuops fleet start|stop|status`。受管任务全部结束后，可移除服务器：
 
 ```bash
 gpuops server remove gpu-server --json
 ```
 
-移除操作会停止 Worker 并删除本地注册信息，保留远端安装、历史记录和实验数据。存在活动任务时会拒绝移除，不会等待任务自动结束。部署和回滚的详细说明见 [远端 Worker 文档](docs/REMOTE_WORKER.md)。
+移除操作会停止 Worker 并删除本地注册信息，保留远端安装、历史记录和实验数据；存在活动任务时会拒绝移除。部署和回滚的详细说明见[远端 Worker 文档](docs/REMOTE_WORKER.md)。
 
 ## 文档与开发
 
@@ -249,14 +218,18 @@ gpuops server remove gpu-server --json
 - [发布验收记录](docs/VALIDATION.md)：CI 覆盖、真实服务器检查及验证范围
 - [贡献指南](CONTRIBUTING.md)与[更新日志](CHANGELOG.md)
 
+运行与 CI 相同的检查，然后构建 wheel：
+
 ```bash
-uv sync --all-extras
-uv run pytest
+uv sync --all-extras --frozen
 uv run ruff check .
+uv run ruff format --check .
+uv run mypy src/
+uv run pytest
 node --test tests/test_web_polling.cjs
 uv build --wheel
 ```
 
-前端轮询测试需要 Node.js 22+。Linux 进程测试使用模拟 GPU 数据，无需物理 GPU。本地测试通过不等于真实 SSH 部署或 CUDA 验收通过，两者分别验证。
+前端轮询测试需要 Node.js 22+。Linux 进程测试使用模拟 GPU 数据，无需物理 GPU。
 
 GPUOps 采用 [MIT 许可证](LICENSE)。

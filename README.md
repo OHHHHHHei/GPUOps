@@ -49,13 +49,18 @@ uv run gpuops version --json
 ```
 
 Prefix the following commands with `uv run` when using that development setup.
+To upgrade an existing 0.3 installation, follow the one-time
+[0.4 upgrade guide](docs/UPGRADE_0_4.md).
 
 ## Connect a server
 
-Each target needs Linux, an NVIDIA driver, `nvidia-smi`, Python 3.10+ with `venv`,
-an accessible Python dependency source or cache, and available home-directory
-quota for GPUOps' 1 GiB owned-data budget. Use an OpenSSH alias that already
-works for your account:
+Each server needs:
+
+- Linux, an NVIDIA driver, and `nvidia-smi`.
+- Python 3.10+ with `venv`.
+- An accessible Python dependency source or cache.
+- Home-directory quota for GPUOps' 1 GiB owned-data budget.
+- An OpenSSH alias that already works for your account.
 
 ```bash
 ssh gpu-server
@@ -71,17 +76,13 @@ gpuops status --json
 
 `server add` reuses a ready installation of the same release, starts a stopped
 Worker, and installs the local GPUOps package when the server has no installation
-or runs a different release. It waits for readiness before adding a registry
-entry. The
-alias becomes the server ID unless an existing installation already has an
-identity; use the returned `server.id` in job manifests. A fresh registry is
-empty. Registration does not install an Agent skill or copy your experiment
-code, environment, or data.
+or runs a different release. It adds the registry entry after the Worker is
+ready. The alias becomes the server ID unless an existing installation already
+has an identity; use the returned `server.id` in job manifests.
 
 `status` reports GPU telemetry and `worker.ready` separately. A ready Worker can
 accept an explicit-host job while telemetry is unavailable; the queued job waits
-for reliable GPU observations before launch. Monitoring exit code zero alone
-does not prove scheduling readiness.
+for reliable GPU observations before launch.
 
 ## Submit an experiment
 
@@ -142,27 +143,18 @@ Any Agent that can invoke a terminal and parse JSON can use GPUOps. Give it the
 [Agent guide](docs/AGENT_GUIDE.md) and [CLI contract](docs/CLI_CONTRACT.md). There
 is no required Agent vendor, SDK, or MCP server.
 
-Codex users can optionally install the bundled skill on the current machine:
+Codex users can optionally install the bundled skill on the current machine, or
+under the SSH account of a registered server:
 
 ```bash
 gpuops skill install --json
-```
-
-Or install it under the SSH account of a registered server:
-
-```bash
 gpuops skill install --server gpu-server --json
 ```
 
-The default destination is `~/.codex/skills/gpu-infra` in the selected account.
-When `CODEX_HOME` is set in that account's command environment, the destination
-is `$CODEX_HOME/skills/gpu-infra`. The remote operation is optional; connect a
-server first if it is not registered. Agents
-running as the Worker Unix account on an installed server can use
-`~/.local/bin/gpuops` from any experiment directory without a source checkout or
-an SSH connection back to the current server. Controllers, server CLIs, and
-running Workers use the same published release. Upgrade a different installation
-with `gpuops deploy install --server ID --json`.
+The destination is `~/.codex/skills/gpu-infra`, or `$CODEX_HOME/skills/gpu-infra`
+when `CODEX_HOME` is set in that account. Agents running as the Worker's Unix
+account on a server can call `~/.local/bin/gpuops` from any experiment directory
+without a source checkout or an SSH connection back to that server.
 
 ## Open the Web console
 
@@ -179,8 +171,7 @@ ETA is optional. Readable training logs may provide a phase or training estimate
 and `schedule.expected_duration` can supply a manual fallback for managed jobs.
 For new training code, [structured progress](docs/PROGRESS.md) provides a small
 stdout protocol and an emitter without extra dependencies. Missing, stale, or
-insufficient evidence stays unknown. ETA does not reserve GPUs or control
-scheduling.
+insufficient evidence stays unknown.
 
 ## Get email when a job finishes
 
@@ -198,76 +189,71 @@ to check status or disable email.
 
 For a job whose only human email should be the later follow-up analysis, submit
 it with `gpuops submit job.json --email off --json`, then select
-`analysis_complete` in the follow-up registration. This per-job override
-requires the same published release on the controller and Worker.
+`analysis_complete` in the follow-up registration.
 
-## Group experiment follow-ups (experimental)
+## Return to the original chat (experimental)
 
-The original one-job Codex command remains available:
+When registered experiments finish, GPUOps can return to the Codex Desktop,
+Claude Code Desktop, or Antigravity chat that registered them. That chat keeps
+its context, reads the saved results, performs the requested analysis, and
+reports there.
 
-```bash
-gpuops followup add RUN_ID --action 'Read the saved metrics, update the research record and report here.' --json
-```
-
-For a cross-server group, edit
-[`examples/followup.example.json`](examples/followup.example.json) and run:
+Edit [`examples/followup.example.json`](examples/followup.example.json) and
+register it from the original chat:
 
 ```bash
 gpuops followup register examples/followup.example.json --json
 ```
 
-`per_job` emits one stable event as each member succeeds, fails, or is
+GPUOps detects the client and session, so the file needs no `target`. Jobs may
+span servers. `per_job` emits one event as each member succeeds, fails, or is
 cancelled; `all_terminal` waits for every member and emits one grouped event.
-Harness continuation and human email (`none`, `terminal`, or
-`analysis_complete`) are independently selectable. The original Agent supplies
-the action and context; GPUOps owns observation and routing, not research
-interpretation.
+Chat continuation and human email (`none`, `terminal`, or `analysis_complete`)
+are chosen independently. The registering Agent supplies the action and context;
+GPUOps observes the jobs and delivers the events.
 
-Registration can infer the original Codex Desktop, Claude Code Desktop, or
-Antigravity conversation; omit `target` when registering from that chat.
-All three reuse the shared checker. Live original-chat continuation has been
-observed, with client-specific limits: Codex requires a loaded chat; Claude and
-Antigravity rely on internal desktop discovery interfaces. See
-[follow-ups](docs/FOLLOWUPS.md) for tested versions, restart limitations,
+In Codex, `gpuops followup add RUN_ID --action '...' --json` is a shortcut for a
+single job. See [follow-ups](docs/FOLLOWUPS.md) for tested client versions,
 receive/complete ACKs, email setup, and external adapters.
 
 ## Get Worker alerts on macOS
 
-Enable desktop notifications on your Mac:
+Get a desktop notification when a Worker stops and another when it is ready
+again:
 
 ```bash
 gpuops alerts enable
 gpuops alerts test
 ```
 
-GPUOps checks the Worker status on all registered SSH servers once a minute,
-even when the Web console is closed. It sends one notification when it confirms
-a Worker has stopped and another when that Worker is ready again. If SSH fails,
-GPUOps reports the status as unknown instead of sending a stop notification.
-
-To also receive email, reuse the SMTP file from job completion setup:
+If SSH fails, the status is reported as unknown and no stop notification is
+sent. To also receive email, reuse the SMTP file from job completion setup:
 
 ```bash
 gpuops alerts enable --email-config smtp.json
 gpuops alerts test --json
 ```
 
-Desktop and email delivery are tracked independently. A failed channel retries
-on subsequent checks while the event remains relevant. Use
-`gpuops alerts enable --no-email` to return to desktop-only alerts.
+Desktop and email delivery are tracked independently, and a failed channel
+retries on later checks while the event remains relevant. Use
+`gpuops alerts enable --no-email` to return to desktop-only alerts,
+`gpuops alerts status --json` to see the latest observations and delivery
+errors, and `gpuops alerts disable` to pause both channels. See
+[Worker alert email](docs/NOTIFICATIONS.md#worker-alert-email-on-macos) for
+details.
 
-Use `gpuops alerts status --json` to see the latest alert observations and
-delivery errors. `gpuops alerts disable` pauses both alert channels without
-pausing session follow-ups. The two features share a macOS checker that runs
-every 60 seconds while needed. Use `gpuops background status --json` to see
-which features are enabled and the last round's SSH calls and errors.
+## Background checker
 
-Checks resume after you log in; your Mac must be awake and able to reach
-the servers. The checker reads Worker state without restarting Workers.
-See [Worker alert email](docs/NOTIFICATIONS.md#worker-alert-email-on-macos)
-for details.
+Worker alerts and chat follow-ups share one macOS checker. It runs every 60
+seconds while either feature has work, batches each server's queries into one
+SSH call per round, and unloads when neither needs it. It runs while you are logged in; your Mac must be
+awake and able to reach the servers.
 
-## Operating boundary
+`gpuops background status --json` shows which features are enabled and the last
+round's SSH calls and errors. `gpuops alerts disable` and
+`gpuops followup disable` pause each feature without affecting the other.
+
+## Operating boundary and maintenance
 
 The queue coordinates jobs sharing one trusted Unix account on each server.
 The Worker avoids GPUs occupied by visible unmanaged processes, including other
@@ -276,22 +262,29 @@ enforce exclusivity against other Unix users or programs that bypass GPUOps.
 Cancellation only signals identity-verified managed processes.
 
 GPUOps confirms idle GPUs twice before allocation and binds launches to device
-UUIDs. Failed devices are retried automatically, but GPUOps cannot repair an
-NVIDIA driver or isolate its shared kernel locks. GPU telemetry always comes
-from the Worker's shared samples; repeated queries do not start extra probes.
+UUIDs. Failed devices are retried automatically. GPU telemetry comes from the
+Worker's shared samples; repeated queries do not start extra probes.
 
 The Worker needs no Docker, `sudo`, systemd, or server-side HTTP service. It does
 not start automatically after a server reboot; use `gpuops fleet start --json`.
 Stopping a Worker leaves its experiment supervisors running. GPUOps owns at
 most 1 GiB per server for installation, cache, durable state, and bounded logs;
-experiment outputs and datasets remain your responsibility.
+experiment outputs and datasets stay with your project.
 
-For maintenance, use `gpuops deploy status|install|rollback|uninstall` and
-`gpuops fleet start|stop|status`. To disconnect a server after its active managed
-work has finished, use `gpuops server remove ID --json`; this stops its Worker
+The control machine, server CLIs, and running Workers use the same release; a
+mismatch returns `version_mismatch`. To upgrade a registered server:
+
+```bash
+gpuops deploy install --server gpu-server --json
+gpuops deploy status --server gpu-server --json
+```
+
+Other maintenance commands are `gpuops deploy rollback|uninstall` and
+`gpuops fleet start|stop|status`. To disconnect a server after its managed work
+has finished, use `gpuops server remove gpu-server --json`; this stops its Worker
 and removes the local registration while preserving its installation, records,
-and experiment data. It refuses active jobs and does not wait for them to drain.
-See [Remote Worker](docs/REMOTE_WORKER.md) for deployment and rollback details.
+and experiment data. It refuses active jobs. See
+[Remote Worker](docs/REMOTE_WORKER.md) for deployment and rollback details.
 
 ## Documentation and development
 
@@ -301,15 +294,18 @@ See [Remote Worker](docs/REMOTE_WORKER.md) for deployment and rollback details.
 - [Release validation](docs/VALIDATION.md): CI coverage, real-server checks, and limitations
 - [Contributing](CONTRIBUTING.md) and [Changelog](CHANGELOG.md)
 
+Run the same checks as CI, then build the wheel:
+
 ```bash
-uv sync --all-extras
-uv run pytest
+uv sync --all-extras --frozen
 uv run ruff check .
+uv run ruff format --check .
+uv run mypy src/
+uv run pytest
 node --test tests/test_web_polling.cjs
 uv build --wheel
 ```
 
 Browser polling tests require Node.js 22+. Linux process tests use synthetic GPU
-observations and do not require physical GPUs. Real deployment and CUDA
-acceptance are separate from local test results. GPUOps is released under the
+observations and do not require physical GPUs. GPUOps is released under the
 [MIT License](LICENSE).

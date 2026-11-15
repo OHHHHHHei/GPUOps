@@ -17,14 +17,7 @@ _CODEX_SESSION = "123e4567-e89b-42d3-a456-426614174000"
 
 
 @pytest.fixture(autouse=True)
-def clean_origin(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    for variable in (
-        "CODEX_THREAD_ID",
-        "CLAUDE_CODE_ENTRYPOINT",
-        "CLAUDE_CODE_SESSION_ID",
-        "ANTIGRAVITY_CONVERSATION_ID",
-    ):
-        monkeypatch.delenv(variable, raising=False)
+def project_directory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
 
 

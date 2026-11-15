@@ -35,8 +35,6 @@ class Launchd:
 
 @pytest.fixture
 def app(tmp_path, monkeypatch):
-    for variable in ("CODEX_THREAD_ID", "CLAUDE_CODE_SESSION_ID", "ANTIGRAVITY_CONVERSATION_ID"):
-        monkeypatch.delenv(variable, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(background.sys, "platform", "darwin")
     launchd = Launchd()

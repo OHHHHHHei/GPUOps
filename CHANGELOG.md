@@ -16,7 +16,10 @@ for tested behavior and limits.
 - Return and persist complete execution-result fields. Remove the unused
   host-wide GPU probe and migration sampling barrier; launches require GPU UUIDs.
 - Replace hidden host arguments with `submit --server` and `deploy --ssh-alias`;
-  remove `queue --all`, and report `doctor.telemetry_ok`.
+  remove `queue --all`, and report `doctor.telemetry_ok`. Remove the `--host`
+  aliases: use `--server` for `job`, `logs` and `cancel`, and `web --bind`.
+- Add `deploy install --no-start` to install a release while keeping the Worker
+  stopped, as used by the 0.4 upgrade.
 
 - Remove the unused `tracking` field from `gpuops/v1` manifests. The [0.4
   upgrade](docs/UPGRADE_0_4.md) converts saved records and fills in explicit

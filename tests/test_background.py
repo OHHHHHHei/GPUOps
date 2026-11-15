@@ -518,6 +518,40 @@ def test_registration_during_self_unload_reloads_agent(app, monkeypatch, capsys)
     assert json.loads(capsys.readouterr().out)["run_id"] == "new"
 
 
+def test_loaded_checker_with_stale_executable_is_reloaded(app):
+    bg, launchd, _transport = app
+    assert main(["alerts", "enable"]) == 0
+    config = plistlib.loads(bg.plist.read_bytes())
+    config["ProgramArguments"][0] = "/removed/python3"
+    bg.plist.write_bytes(plistlib.dumps(config))
+
+    assert main(["alerts", "enable"]) == 0
+
+    assert launchd.loaded and launchd.changes == ["bootstrap", "bootout", "bootstrap"]
+    assert plistlib.loads(bg.plist.read_bytes())["ProgramArguments"][0] == sys.executable
+
+
+def test_registration_is_saved_when_checker_fails_to_load(app, monkeypatch, capsys):
+    bg, launchd, _transport = app
+
+    def launchctl(action, *args, **kwargs):
+        if action == "bootstrap":
+            raise RuntimeError("Bootstrap failed: 5: Input/output error")
+        return launchd(action, *args, **kwargs)
+
+    monkeypatch.setattr(background, "_launchctl", launchctl)
+    monkeypatch.setenv("CODEX_THREAD_ID", "00000000-0000-4000-8000-000000000001")
+    command = ["followup", "add", "new", "--action", "Read metrics", "--server", "gpu01", "--json"]
+
+    assert main(command) == 0
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["run_id"] == "new"
+    assert "Input/output error" in output["background_error"]
+    assert bg.event_store().list()[0].run_id == "new"
+    assert bg.followups_enabled() and not launchd.loaded
+
+
 @pytest.mark.parametrize("broken", ["alerts", "followups"])
 def test_feature_error_does_not_block_other_feature_or_stats(app, monkeypatch, broken):
     bg, _, transport = app

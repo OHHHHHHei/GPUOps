@@ -24,7 +24,12 @@ from gpuops.cli_errors import CommandError, error_payload, print_error
 from gpuops.config import select_targets
 from gpuops.control import RemoteTarget
 from gpuops.file_io import atomic_write_bytes
-from gpuops.followup_delivery import AdapterSettings, DeliveryRouter, load_adapters
+from gpuops.followup_delivery import (
+    BUILTIN_HARNESSES,
+    AdapterSettings,
+    DeliveryRouter,
+    load_adapters,
+)
 from gpuops.followup_groups import (
     GroupStore,
     apply_group_observations,
@@ -165,6 +170,7 @@ class Background:
         self.alert_state = self.root / "alerts.json"
         self.stats = self.root / "background-last.json"
         self.plist = self.home / "Library/LaunchAgents" / f"{LABEL}.plist"
+        self.sync_error: str | None = None
 
     def event_store(self) -> FollowupStore:
         return FollowupStore(self.followup_root / "records")
@@ -199,7 +205,11 @@ class Background:
 
     def enable_followups_locked(self, events: FollowupStore) -> None:
         self.set_switch_locked("followups", True)
-        self.sync_locked(events)
+        try:
+            self.sync_locked(events)
+        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+            # The registration is already saved; report the checker separately.
+            self.sync_error = str(error) or error.__class__.__name__
 
     @contextmanager
     def round_lock(self) -> Iterator[bool]:
@@ -227,27 +237,44 @@ class Background:
             switches.followups and self.pending(events, self.group_store())["total"] > 0
         ):
             if not self.is_loaded():
-                config = {
-                    "Label": LABEL,
-                    "ProgramArguments": [sys.executable, "-m", "gpuops", "background", "_run"],
-                    "EnvironmentVariables": {
-                        "PATH": (
-                            f"{self.home / '.local/bin'}:/opt/homebrew/bin:/usr/local/bin:"
-                            "/usr/bin:/bin:/usr/sbin:/sbin"
-                        )
-                    },
-                    "RunAtLoad": True,
-                    "StartInterval": INTERVAL_SECONDS,
-                    "LimitLoadToSessionType": "Aqua",
-                }
-                self.plist.parent.mkdir(parents=True, exist_ok=True)
-                atomic_write_bytes(self.plist, plistlib.dumps(config))
-                _launchctl("bootstrap", self.domain, str(self.plist))
+                self._load()
+            elif self._saved_launch_config() != self._launch_config():
+                # A reinstall can move the Python executable; reload between rounds.
+                with self.round_lock() as idle:
+                    if idle:
+                        self._unload()
+                        self._load()
         else:
             # A command never unloads a checker that is still delivering or writing results.
             with self.round_lock() as idle:
                 if idle:
                     self._unload()
+
+    def _launch_config(self) -> dict[str, Any]:
+        return {
+            "Label": LABEL,
+            "ProgramArguments": [sys.executable, "-m", "gpuops", "background", "_run"],
+            "EnvironmentVariables": {
+                "PATH": (
+                    f"{self.home / '.local/bin'}:/opt/homebrew/bin:/usr/local/bin:"
+                    "/usr/bin:/bin:/usr/sbin:/sbin"
+                )
+            },
+            "RunAtLoad": True,
+            "StartInterval": INTERVAL_SECONDS,
+            "LimitLoadToSessionType": "Aqua",
+        }
+
+    def _saved_launch_config(self) -> Any:
+        try:
+            return plistlib.loads(self.plist.read_bytes())
+        except (OSError, plistlib.InvalidFileException, ValueError):
+            return None
+
+    def _load(self) -> None:
+        self.plist.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_bytes(self.plist, plistlib.dumps(self._launch_config()))
+        _launchctl("bootstrap", self.domain, str(self.plist))
 
     def _unload(self) -> None:
         # Unlink before bootout: launchd can terminate the current checker.
@@ -261,7 +288,7 @@ class Background:
         retryable = (
             _retryable_harnesses(load_adapters())
             if any(
-                row.status == "delivery_unknown" and row.harness != "codex-desktop"
+                row.status == "delivery_unknown" and row.harness not in BUILTIN_HARNESSES
                 for row in records
             )
             else set()

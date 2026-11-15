@@ -130,7 +130,7 @@ def read_cache():
     if not isinstance(data, dict) or not isinstance(data.get("gpus"), list):
         raise CacheError("telemetry_unavailable", "Worker telemetry cache has no valid telemetry data", snapshot["sampled_at"])
     if any(not isinstance(gpu, dict) for gpu in data["gpus"]):
-        raise CacheError("telemetry_unavailable", "Worker telemetry telemetry GPUs are invalid", snapshot["sampled_at"])
+        raise CacheError("telemetry_unavailable", "Worker telemetry GPUs are invalid", snapshot["sampled_at"])
     collected_at = parse_timestamp(data.get("collected_at"), "data.collected_at")
     if collected_at != sampled_at:
         raise CacheError("telemetry_unavailable", "Worker telemetry timestamps do not match", snapshot["sampled_at"])

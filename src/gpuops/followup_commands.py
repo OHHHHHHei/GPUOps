@@ -151,10 +151,17 @@ def run_command(args: argparse.Namespace) -> int:
             result = asyncio.run(background.run_round(followup_only=True))
             if result.get("reason") == "followups_paused":
                 result["message"] = PAUSED_MESSAGE
-        elif action == "add":
-            result = register(args, store, background).model_dump(mode="json")
-        elif action == "register":
-            result = register_group(args.file, store, background)
+        elif action in {"add", "register"}:
+            result = (
+                register(args, store, background).model_dump(mode="json")
+                if action == "add"
+                else register_group(args.file, store, background)
+            )
+            if background.sync_error:
+                result["background_error"] = (
+                    f"registration saved, but the background checker did not load: "
+                    f"{background.sync_error}; run `gpuops followup enable` to retry"
+                )
         elif action == "adapter":
             with store.lock():
                 result = configure_or_describe(args)

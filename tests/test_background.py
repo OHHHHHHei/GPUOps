@@ -434,10 +434,10 @@ def test_smtp_writeback_preserves_concurrent_completion(app, monkeypatch, fails)
         polling = pool.submit(run, bg)
         assert entered.wait(3)
         try:
-            completed = pool.submit(
+            completed, first_receipt = pool.submit(
                 store.acknowledge, row.id, summary="saved analysis", session_id="original"
             ).result(2)
-            assert completed.status == "completed"
+            assert completed.status == "completed" and first_receipt
             assert pool.submit(main, ["followup", "disable"]).result(2) == 0
             assert launchd.loaded
         finally:

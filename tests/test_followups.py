@@ -156,14 +156,17 @@ def test_registration_and_original_chat_receipt_are_distinct_from_analysis(
     followup.status = "queued"
     store.save(followup)
     monkeypatch.setenv("CODEX_THREAD_ID", "other-chat")
-    with pytest.raises(ValueError, match="original Codex"):
+    with pytest.raises(ValueError):
         store.acknowledge(followup.id)
     monkeypatch.setenv("CODEX_THREAD_ID", followup.thread_id)
-    received = store.acknowledge(followup.id)
+    received, first_receipt = store.acknowledge(followup.id)
+    assert first_receipt
     assert received.status == "received" and received.completed_at is None
-    completed = store.acknowledge(followup.id, summary="Loss decreased.")
+    assert store.acknowledge(followup.id) == (received, False)
+    completed, first_receipt = store.acknowledge(followup.id, summary="Loss decreased.")
+    assert not first_receipt
     assert completed.status == "completed" and completed.summary == "Loss decreased."
-    assert store.acknowledge(followup.id) == completed
+    assert store.acknowledge(followup.id) == (completed, False)
 
 
 def test_queue_targets_exact_chat_and_home_without_starting_a_model(followup, monkeypatch):

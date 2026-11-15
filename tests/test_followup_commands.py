@@ -123,7 +123,11 @@ print(json.dumps({"api_version": "gpuops.delivery/v1", "event_id": event["event_
     assert [row["status"] for row in envelope["jobs"]] == ["succeeded", "failed", "cancelled"]
     assert envelope["context"] == {"question": "Compare variants"}
     assert client("acknowledge", event_id, "--session", "wrong", code=1)["ok"] is False
-    assert client("acknowledge", event_id, "--session", "original-session")["status"] == "received"
+    received = client("acknowledge", event_id, "--session", "original-session")
+    assert received["status"] == "received" and received["first_receipt"] is True
+    assert (
+        client("acknowledge", event_id, "--session", "original-session")["first_receipt"] is False
+    )
     client("complete", event_id, "--session", "original-session", "--summary", " ", code=1)
     client(
         "complete",
@@ -201,3 +205,60 @@ def test_terminal_email_failure_does_not_block_model_or_repeat_accepted_delivery
     assert transport.watch.await_count == 1
     store = FollowupStore(tmp_path / ".local/state/gpuops/followups/records")
     assert len(store.list()) == 1
+
+
+@pytest.mark.parametrize("harness", ["claude-desktop", "antigravity"])
+def test_builtin_desktop_uses_shared_checker_and_original_session_receipts(
+    client, tmp_path, monkeypatch, harness
+):
+    monkeypatch.delenv("CODEX_THREAD_ID")
+    if harness == "claude-desktop":
+        monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", "claude-desktop")
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "original-desktop-session")
+        adapter = "gpuops.claude_delivery.ClaudeDesktopSocket"
+    else:
+        monkeypatch.setenv("ANTIGRAVITY_CONVERSATION_ID", "original-desktop-session")
+        adapter = "gpuops.antigravity_delivery.AntigravityAgentAPI"
+        monkeypatch.setattr(f"{adapter}.resolve_workspace", Mock(return_value=tmp_path))
+    request = tmp_path / "native.json"
+    request.write_text(
+        json.dumps(
+            {
+                "jobs": [{"run_id": "native", "server_id": "gpu01"}],
+                "action": "Read the saved metrics and report here.",
+            }
+        )
+    )
+    group = client("register", str(request))
+    event_id = group["events"][0]["id"]
+    watch = AsyncMock(
+        return_value={
+            "server_id": "gpu01",
+            "worker": {},
+            "jobs": {"native": job("native", JobStatus.SUCCEEDED).model_dump(mode="json")},
+        }
+    )
+    monkeypatch.setattr("gpuops.background.SshWorkerTransport", lambda **_: Mock(watch=watch))
+    send = Mock(
+        side_effect=[OSError("desktop unavailable"), subprocess.CompletedProcess([], 0, "sent", "")]
+    )
+    monkeypatch.setattr(f"{adapter}.send", send)
+    client("check")
+    assert client("show", event_id)["status"] == "ready"
+    client("disable")
+    client("check")
+    assert send.call_count == 1
+    monkeypatch.setattr(sys, "platform", "darwin")
+    client("enable")
+    client("check")
+    queued = client("show", event_id)
+    assert queued["status"] == "queued" and queued["harness"] == harness
+    assert "--session" not in queued["message"] and "first_receipt" in queued["message"]
+    assert client("acknowledge", event_id)["first_receipt"] is True
+    assert client("acknowledge", event_id)["first_receipt"] is False
+    assert (
+        client("complete", event_id, "--summary", "Saved metrics compared.")["status"]
+        == "completed"
+    )
+    client("check")
+    assert watch.await_count == 1 and send.call_count == 2

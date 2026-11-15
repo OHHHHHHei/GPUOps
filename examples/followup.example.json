@@ -11,10 +11,6 @@
       "server_id": "gpu-b"
     }
   ],
-  "target": {
-    "harness": "codex-desktop",
-    "workspace": "."
-  },
   "mode": "all_terminal",
   "action": "Compare the saved metrics and report the conclusion in this chat.",
   "context": {

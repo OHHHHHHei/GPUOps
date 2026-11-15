@@ -223,13 +223,13 @@ Harness continuation and human email (`none`, `terminal`, or
 the action and context; GPUOps owns observation and routing, not research
 interpretation.
 
-The one-job and cross-server all-terminal Codex loops passed live acceptance
-before this release. The 0.4 shared checker still needs live cutover acceptance;
-external adapters have local contract tests. Codex automatic execution
-still requires the exact original chat to be loaded in Desktop. A generic
-external adapter is only a JSON/receipt hook and does not claim native Claude
-Code or DeepSeek session support. See [follow-ups](docs/FOLLOWUPS.md) for the
-adapter protocol, explicit receive/complete ACKs, email setup, and limitations.
+Registration can infer the original Codex Desktop, Claude Code Desktop, or
+Antigravity conversation; omit `target` when registering from that chat.
+All three reuse the shared checker. Live original-chat continuation has been
+observed, with client-specific limits: Codex requires a loaded chat; Claude and
+Antigravity rely on internal desktop discovery interfaces. See
+[follow-ups](docs/FOLLOWUPS.md) for tested versions, restart limitations,
+receive/complete ACKs, email setup, and external adapters.
 
 ## Get Worker alerts on macOS
 

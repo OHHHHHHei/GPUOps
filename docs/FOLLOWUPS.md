@@ -13,12 +13,12 @@ observes execution results and carries that caller-provided material to the
 target; the original Agent remains responsible for reading saved evidence,
 performing the analysis, updating research records, and reporting findings.
 
-The single-job Codex Desktop loop and a cross-server `all_terminal` group passed
-live acceptance on 2026-11-13–14, before this 0.4 change. The original loaded
-chat continued, read saved metrics, and reported its analysis; the user confirmed
-receiving the analysis-complete email. Per-job grouping was observed without
-starting additional model turns. External adapters have local contract tests.
-The new 0.4 shared background checker still needs live cutover acceptance.
+Codex Desktop and the shared 0.4 checker passed live acceptance on
+2026-11-13–14, including a cross-server group and user-confirmed analysis email.
+On 2026-11-15, Claude Code Desktop and Antigravity also continued their original
+test chats, recalled earlier context, read saved fixture metrics, and displayed
+analysis in those same desktop conversations. See the desktop boundaries below
+for the exact tested scope; these integrations remain experimental.
 
 ## Register work
 
@@ -45,10 +45,6 @@ gpuops followup register examples/followup.example.json --json
     {"run_id": "baseline-01", "server_id": "gpu-a"},
     {"run_id": "candidate-01", "server_id": "gpu-b"}
   ],
-  "target": {
-    "harness": "codex-desktop",
-    "workspace": "."
-  },
   "mode": "all_terminal",
   "action": "Compare the saved metrics and report the conclusion in this chat.",
   "context": {
@@ -65,10 +61,24 @@ client's submission journal records the original destination; otherwise it is
 required. A supplied server cannot conflict with the journal. Members may span
 different registered SSH servers.
 
-For `codex-desktop`, `target.session_id` defaults to `CODEX_THREAD_ID`. Other
-Harness names require an explicit session ID when `resume` is true. `workspace`
-defaults to the current directory and must resolve to an existing local project
-directory. `action` is required when `resume` is true. `context` is an optional
+`target` can be omitted when registering from the original desktop chat:
+
+| Harness | Session source |
+| --- | --- |
+| `codex-desktop` | `CODEX_THREAD_ID` |
+| `claude-desktop` | `CLAUDE_CODE_SESSION_ID`, with `CLAUDE_CODE_ENTRYPOINT=claude-desktop` |
+| `antigravity` | `ANTIGRAVITY_CONVERSATION_ID` |
+
+An ambiguous or missing origin requires explicit `target.harness` and
+`target.session_id`; GPUOps never guesses from the project directory. Explicit
+values cannot contradict that Harness's current session. External adapters use
+an explicit target. `resume: false` needs no session discovery.
+
+`target.workspace` defaults to the current directory for Codex and Claude. For
+Antigravity it defaults to the original conversation's project directory from
+`get-conversation-metadata`; an explicit directory may be that root or a
+subdirectory. It must exist locally. `action` is required when `resume` is true.
+`context` is an optional
 map of strings; it is passed through as context, not interpreted as new task
 instructions by GPUOps.
 
@@ -179,7 +189,7 @@ Delivery acceptance and completed analysis are separate states:
 | `waiting` | Registered single-job event; no terminal result observed. |
 | `ready` | Completion event saved; delivery pending or retrying. |
 | `sending` | Adapter invocation in progress. |
-| `queued` | Codex queue or external adapter returned an acceptance receipt. |
+| `queued` | Transport accepted the message; for Claude this means the socket write completed, not model receipt. |
 | `delivery_unknown` | The process timed out, exited ambiguously, returned malformed output, or delivery was interrupted. |
 | `received` | The target session explicitly ran `followup acknowledge`. |
 | `completed` | The target session recorded a nonempty analysis summary. |
@@ -190,11 +200,14 @@ The delivered message asks the target Agent to record both milestones:
 
 ```sh
 gpuops followup acknowledge EVENT_ID --json
-# Read the saved evidence and perform the registered action.
+# Continue only if ok and first_receipt are both true.
+# Then read the saved evidence and perform the registered action.
 gpuops followup complete EVENT_ID --summary 'Brief findings and record location.' --json
 ```
 
-For a non-Codex adapter, both commands require the exact configured session ID:
+Built-in desktop routes infer the current session for ACK, completion, and
+retry. A conflicting current session is rejected. For an external adapter,
+provide the exact registered session ID:
 
 ```sh
 gpuops followup acknowledge EVENT_ID --session SESSION_ID --json
@@ -206,6 +219,77 @@ gpuops followup complete EVENT_ID --session SESSION_ID \
 The findings must still be reported through the Harness itself. GPUOps records
 the caller-supplied summary and does not independently verify its scientific
 content.
+
+`acknowledge` returns `first_receipt: true` only for the first transition into
+`received`, determined under the existing record lock. A repeated message gets
+`false` and must stop before analysis or notification. The flag is a response
+field, not another persisted state. If analysis was interrupted after receipt,
+continue it explicitly in the original chat and call `complete`; GPUOps does
+not automatically restart already received work.
+
+## Claude Code Desktop and Antigravity boundaries
+
+Both use the existing 60-second checker. No extra daemon, hook, model process,
+or polling loop is installed. Neither route changes the desktop's model or
+permission settings. The same registration supports `per_job` and
+`all_terminal`, with independently selected email timing.
+
+**Claude Code Desktop** uses the original session's Unix inbox socket. Each
+attempt looks up its current PID and socket in `~/.claude/sessions/*.json`;
+the PID must still exist and the entry point must be `claude-desktop`.
+An absent session or failed connection leaves the event `ready` for a later
+round. A failed write becomes `delivery_unknown`. A completed write becomes
+`queued`; only the original chat's ACK proves receipt. There is no socket ACK
+and no automatic resend after a completed write.
+
+The registry and message framing are internal client interfaces. Desktop
+5.1231.2 with its embedded Claude Code **2.1.321**, in the user's **Auto**
+permission mode, passed idle-chat and loaded-but-unselected-chat tests. The
+standalone CLI version is unrelated to that engine. Other permission modes,
+including bypass mode that can hold inbound peer messages, are not accepted as
+automatic continuation paths.
+
+Normal app restart was also verified after restoring access to `claude.ai`:
+the same original chat loaded with a new process and socket, and the adapter
+rediscovered it by session ID. That chat registered a cross-server group without
+an explicit target, received its completion event, recalled earlier context,
+read the already saved remote metrics, and recorded analysis completion in the
+original GUI. The analysis email was accepted by SMTP. This reused existing
+terminal acceptance jobs; it did not rerun training.
+
+During registration, Claude's Auto classifier first denied the command; the
+user authorized it directly in that chat. The subsequent completion message,
+ACK, result reads, and completion proceeded automatically. GPUOps neither changes
+permission settings nor bypasses permission prompts. A returned peer message
+must operate within the user's authorization in the original conversation.
+This establishes continuation after the original chat is loaded again, not
+automatic app launch or loading an unloaded/archived chat. OS reboot remains
+unverified.
+
+**Antigravity** uses the app's bundled `language_server agentapi send-message`.
+Each attempt reads a live `~/.gemini/antigravity/daemon/hub_*.json`, temporarily
+passes its address and token in the subprocess environment, and checks the
+original conversation and project before sending. Tokens are not persisted in
+GPUOps records or delivery receipts. Preflight failure keeps `ready`; an
+uncertain send becomes `delivery_unknown`. A matching API receipt means
+`queued`, not that analysis ran. Version **2.32.1**, in the user's **Turbo**
+mode, passed the idle original-chat fixture test and a real Worker acceptance:
+two short scalar jobs succeeded on one server, a scheduled job was cancelled
+before launch on another, and both `per_job` and cross-server `all_terminal`
+groups returned to the original desktop chat. The Agent registered without
+`target`, read saved remote metrics, acknowledged three events, and completed
+analysis visibly in the GUI. A source-checkout checker round delivered the
+events with two SSH queries; the existing scheduled checker sent all three
+analysis-complete emails; the user confirmed receiving all three.
+The scalar jobs exercised GPU allocation and release, not CUDA computation.
+The daemon discovery files
+are internal interfaces; other client versions and full app/OS restart paths
+remain unverified.
+
+For both routes, inspect the original chat before using `retry` on an uncertain
+delivery. They are not idempotent transports. App upgrades may change their
+internal discovery formats. There is no fallback that starts a separate CLI
+conversation and reports it as the original desktop chat.
 
 ## Codex Desktop boundary
 
@@ -229,8 +313,9 @@ and the loaded-thread behavior is visible in the
 
 ## External Harness adapter protocol
 
-An adapter is a caller-supplied executable, not built-in Claude Code, DeepSeek,
-or other Harness support. Configure a name with a strict JSON file:
+An external adapter is a caller-supplied executable for another Harness.
+The names `codex-desktop`, `claude-desktop`, and `antigravity` are reserved
+for the built-in routes. Configure another name with a strict JSON file:
 
 ```json
 {
@@ -238,6 +323,11 @@ or other Harness support. Configure a name with a strict JSON file:
   "idempotent": true
 }
 ```
+
+Before upgrading, remove any manually configured adapter entries using the new
+built-in names from `~/.config/gpuops/followup-adapters.json`. Those names now
+select the built-in route; a conflicting configuration is reported as invalid.
+Keep other custom adapter entries under their original names.
 
 ```sh
 gpuops followup adapter my-harness adapter.json --json

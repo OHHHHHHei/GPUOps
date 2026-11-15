@@ -19,6 +19,8 @@ from pydantic import Field
 from gpuops.contracts import RunId
 from gpuops.control import RemoteTarget
 from gpuops.file_io import atomic_write_bytes
+from gpuops.followup_delivery import BUILTIN_HARNESSES
+from gpuops.followup_registration import validate_receipt_session
 from gpuops.models import JobRecord, StrictModel, utc_now
 
 
@@ -154,15 +156,12 @@ class FollowupStore:
 
     def acknowledge(
         self, followup_id: str, *, summary: str | None = None, session_id: str | None = None
-    ) -> Followup:
+    ) -> tuple[Followup, bool]:
         if summary is not None and not summary.strip():
             raise ValueError("completion requires a nonempty analysis summary")
         with self.lock():
             followup = self.get(followup_id)
-            if (session_id or os.environ.get("CODEX_THREAD_ID")) != followup.thread_id:
-                raise ValueError(
-                    "acknowledge the follow-up from its original Codex chat or Harness session"
-                )
+            validate_receipt_session(followup.harness, followup.thread_id, session_id)
             if followup.status not in {
                 "sending",
                 "queued",
@@ -171,6 +170,7 @@ class FollowupStore:
                 "completed",
             }:
                 raise ValueError("the follow-up has not been delivered")
+            first_receipt = followup.status not in {"received", "completed"}
             if followup.status != "completed":
                 followup.received_at = followup.received_at or utc_now()
                 if followup.status != "received":
@@ -181,7 +181,7 @@ class FollowupStore:
                     followup.completed_at = utc_now()
                     followup.summary = summary
                 self.save(followup)
-            return followup
+            return followup, first_receipt
 
 
 def job_outcome(server_id: str, run_id: str, job: JobRecord | None) -> dict[str, Any]:
@@ -225,7 +225,7 @@ def completion_message(followup: Followup) -> str:
     )
     session_option = (
         ""
-        if followup.harness == "codex-desktop"
+        if followup.harness in BUILTIN_HARNESSES
         else f" --session {shlex.quote(followup.thread_id)}"
     )
     return (
@@ -234,6 +234,8 @@ def completion_message(followup: Followup) -> str:
         "Continue using this chat's research context and agreed scope.\n"
         f"{json.dumps(details, ensure_ascii=False, indent=2)}\n\n"
         f"First run: gpuops followup acknowledge {followup.id}{session_option} --json\n"
+        "Continue only if it succeeds and first_receipt is true. If first_receipt is false, "
+        "stop: this event was already received; do not repeat analysis or notifications.\n"
         f"Requested follow-up: {followup.action}\n"
         "Use the saved experiment metrics and artifacts; report failure/cancellation as recorded. "
         "Use the project_workspace above for local commands. "

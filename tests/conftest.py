@@ -1,4 +1,4 @@
-"""Use generic test servers in an isolated registry."""
+"""Isolate tests from the developer's servers and desktop session."""
 
 import json
 from dataclasses import asdict
@@ -11,6 +11,17 @@ TEST_TARGETS = (
     ServerTarget(id="gpu01", label="GPU 01", ssh_host="lab-gpu01"),
     ServerTarget(id="gpu02", label="GPU 02", ssh_host="lab-gpu02"),
 )
+
+
+@pytest.fixture(autouse=True)
+def isolated_chat_environment(monkeypatch):
+    for variable in (
+        "CODEX_THREAD_ID",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "ANTIGRAVITY_CONVERSATION_ID",
+    ):
+        monkeypatch.delenv(variable, raising=False)
 
 
 @pytest.fixture(autouse=True)

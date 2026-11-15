@@ -134,11 +134,19 @@ explicit context when it cannot be inferred.
 
 `followup register FILE --json` accepts one strict `gpuops.followup/v1` JSON
 document (or `-` for stdin). It contains `jobs[]` (`run_id` and optional
-`server_id`), a `target` (`harness`, optional `session_id`, optional
+`server_id`), an optional `target` (optional `harness`, `session_id`,
 `workspace`), `mode`, `action`, string-valued `context`, `resume`, `notify`, and
 optional `name`. `mode` is `per_job` or `all_terminal`. Success, failure, and
 cancellation all satisfy a member's terminal boundary. Members may resolve to
 different servers.
+
+When `resume` is true, omitted target values come from the original desktop
+environment: `CODEX_THREAD_ID`, `CLAUDE_CODE_SESSION_ID` with the desktop entry
+point, or `ANTIGRAVITY_CONVERSATION_ID`. Ambiguous/missing identity requires an
+explicit target; same-Harness session conflicts are rejected. Antigravity
+defaults to the conversation's project root and permits an explicit project
+subdirectory. Other workspaces default to the current directory. `resume: false`
+does not require or discover a session. `add` remains the Codex-only shortcut.
 
 `resume` independently controls Harness delivery. `notify` is `none`,
 `terminal`, or `analysis_complete`; the last requires session continuation and
@@ -169,8 +177,9 @@ context, job snapshots, message, and `trigger_job`; `trigger_job` identifies the
 member for `per_job` and is `null` for `all_terminal`. Adapter acceptance is not
 model receipt or completion. The exact request/response contract, timeout, and
 idempotency limits are in [the follow-up contract](FOLLOWUPS.md). A configured
-adapter does not establish native Claude Code, DeepSeek, or original-session
-support; custom continuity is reported as `unverified`.
+adapter does not establish original-session support; custom continuity is
+reported as `unverified`. `codex-desktop`, `claude-desktop`, and `antigravity`
+are reserved built-in names. Their tested boundaries are documented separately.
 
 `add`, `register`, `show ID`, `acknowledge ID`,
 `complete ID --summary TEXT`, `stop ID`, and `retry ID` return `ok` plus the
@@ -178,6 +187,12 @@ result. `show` and `stop` accept group or event IDs; ACK, completion, and retry
 use event IDs. For an external Harness, ACK/completion/retry accept `--session`
 and require it to equal the registered session. `--session` validates routing;
 it does not establish a connection.
+
+Built-in desktop routes infer the session for ACK/completion/retry and reject
+conflicts with the current same-Harness session. `acknowledge` additionally
+returns `first_receipt`: true only when this call first marks the event received,
+false for an already received/completed event. A delivered duplicate must stop
+when this flag is false. The flag is not persisted in the event schema.
 
 `list` returns `ok`, `followups[]` (without saved job/message bodies),
 `groups[]`, and `invalid_records[]` (`path` and `error`; other records still
@@ -189,16 +204,17 @@ expose members, planned/created events, `all_terminal`, `completed`,
 `completion_kind`, and aggregate status. Explicitly stopping the group yields
 `stopped`; stopping only events derives `delivery_stopped` when all are stopped
 or `partially_stopped` while another planned event remains active.
-`queued` means only delivery acceptance; `received` and `completed` are
+`queued` means only transport acceptance (Claude: completed socket write);
+`received` and `completed` are
 explicit target-session ACKs. `observed` means no Harness continuation was
 requested. None of these states changes experiment status.
 
-Uncertain Codex or non-idempotent adapter delivery requires inspection before
+Uncertain built-in or non-idempotent adapter delivery requires inspection before
 explicit retry. An adapter marked `idempotent` is trusted to deduplicate the
 stable event ID and may be retried automatically; GPUOps does not verify that
 claim. The existing Codex Desktop loaded-chat limitation remains: queue
-acceptance does not wake an unloaded original chat. New grouped paths are
-locally tested but have not received a new live deployment acceptance.
+acceptance does not wake an unloaded original chat. Claude/Antigravity live
+acceptance and unverified restart scenarios are listed in [FOLLOWUPS.md](FOLLOWUPS.md).
 
 ## Job lifecycle and execution results
 

@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 ADAPTER_API_VERSION = "gpuops.completion/v1"
 DELIVERY_API_VERSION = "gpuops.delivery/v1"
 ADAPTER_TIMEOUT_SECONDS = 30
+BUILTIN_HARNESSES = ("codex-desktop", "claude-desktop", "antigravity")
 _ADAPTER_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 
 
@@ -147,8 +148,8 @@ def send_followup_email(followup: Followup) -> None:
 
 
 def _validate_adapter_name(name: str) -> str:
-    if name == "codex-desktop":
-        raise ValueError("codex-desktop is a reserved built-in harness")
+    if name in BUILTIN_HARNESSES:
+        raise ValueError(f"{name} is a reserved built-in harness")
     if not _ADAPTER_NAME.fullmatch(name):
         raise ValueError("adapter name must use lowercase letters, digits, '.', '_', or '-'")
     return name
@@ -206,11 +207,12 @@ def configure_adapter(name: str, file: Path) -> AdapterSettings:
 def adapter_capabilities() -> list[dict[str, object]]:
     capabilities: list[dict[str, object]] = [
         {
-            "name": "codex-desktop",
+            "name": name,
             "idempotent": False,
             "builtin": True,
             "session_continuity": "native",
         }
+        for name in BUILTIN_HARNESSES
     ]
     capabilities.extend(
         {
@@ -257,6 +259,15 @@ class DeliveryRouter:
             if self.codex is None:
                 raise OSError("Codex desktop delivery is not available")
             return self.codex.send(followup)
+
+        if followup.harness == "claude-desktop":
+            from gpuops.claude_delivery import ClaudeDesktopSocket
+
+            return ClaudeDesktopSocket().send(followup)
+        if followup.harness == "antigravity":
+            from gpuops.antigravity_delivery import AntigravityAgentAPI
+
+            return AntigravityAgentAPI().send(followup)
 
         settings = self.adapters.get(followup.harness)
         if settings is None:
@@ -308,7 +319,7 @@ class DeliveryRouter:
         return subprocess.CompletedProcess(settings.command, 0, receipt.strip(), "")
 
     def can_retry_uncertain(self, followup: Followup) -> bool:
-        if followup.harness == "codex-desktop":
+        if followup.harness in BUILTIN_HARNESSES:
             return False
         settings = self.adapters.get(followup.harness)
         return settings.idempotent if settings is not None else False

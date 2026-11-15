@@ -92,6 +92,10 @@ def prepare_delivery(root: Path, *, harness: str | None = "codex-desktop") -> No
             ),
         }
         atomic_write_bytes(root / "codex.json", json.dumps(settings).encode())
+    elif harness in {"claude-desktop", "antigravity"}:
+        # The desktop adapter discovers the live session at delivery time.
+        # An offline app must not prevent durable registration.
+        return
     elif harness is not None:
         from gpuops.followup_delivery import load_adapters
 
@@ -179,10 +183,12 @@ def run_command(args: argparse.Namespace) -> int:
                 background.sync_locked(store)
             result = {"enabled": enabled}
         elif action in {"acknowledge", "complete"}:
-            followup = store.acknowledge(
+            followup, first_receipt = store.acknowledge(
                 args.followup_id, summary=getattr(args, "summary", None), session_id=args.session
             )
             result = followup.model_dump(mode="json")
+            if action == "acknowledge":
+                result["first_receipt"] = first_receipt
             if (
                 action == "complete"
                 and followup.notify == "analysis_complete"
@@ -215,10 +221,9 @@ def run_command(args: argparse.Namespace) -> int:
                         raise ValueError(
                             "retry requires delivery_unknown; ordinary failures retry automatically"
                         )
-                    if (args.session or os.environ.get("CODEX_THREAD_ID")) != followup.thread_id:
-                        raise ValueError(
-                            "verify delivery and retry from the original Harness session"
-                        )
+                    from gpuops.followup_registration import validate_receipt_session
+
+                    validate_receipt_session(followup.harness, followup.thread_id, args.session)
                     followup.status = "ready"
                     followup.error = None
                     store.save(followup)
@@ -265,16 +270,14 @@ def register_group(file: str, store: FollowupStore, background: Background) -> d
 
     raw = sys.stdin.read() if file == "-" else Path(file).expanduser().read_text()
     request = FollowupRequest.model_validate_json(raw)
-    thread_id, workspace = resolve_target(request.target, resume=request.resume)
+    harness, thread_id, workspace = resolve_target(request.target, resume=request.resume)
     members = []
     for reference in request.jobs:
         server_id, ssh_host = resolve_job(reference)
         members.append(RemoteJob(run_id=reference.run_id, server_id=server_id, ssh_host=ssh_host))
     if request.notify != "none" and read_email_settings() is None:
         raise ValueError("configure follow-up email before registering an email notification")
-    prepare_delivery(
-        background.followup_root, harness=request.target.harness if request.resume else None
-    )
+    prepare_delivery(background.followup_root, harness=harness if request.resume else None)
     group = create_group(
         GroupStore(background.followup_root / "groups"),
         store,
@@ -283,7 +286,7 @@ def register_group(file: str, store: FollowupStore, background: Background) -> d
         workspace=workspace,
         action=request.action,
         mode=request.mode,
-        harness=request.target.harness,
+        harness=harness,
         notify=request.notify,
         resume=request.resume,
         context=request.context,

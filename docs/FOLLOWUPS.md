@@ -247,9 +247,24 @@ The registry and message framing are internal client interfaces. Desktop
 permission mode, passed idle-chat and loaded-but-unselected-chat tests. The
 standalone CLI version is unrelated to that engine. Other permission modes,
 including bypass mode that can hold inbound peer messages, are not accepted as
-automatic continuation paths. Restart acceptance is pending: the app's startup
-currently fails to resolve `claude.ai`, before conversation initialization.
-GPUOps does not launch or load a missing Claude conversation.
+automatic continuation paths.
+
+Normal app restart was also verified after restoring access to `claude.ai`:
+the same original chat loaded with a new process and socket, and the adapter
+rediscovered it by session ID. That chat registered a cross-server group without
+an explicit target, received its completion event, recalled earlier context,
+read the already saved remote metrics, and recorded analysis completion in the
+original GUI. The analysis email was accepted by SMTP. This reused existing
+terminal acceptance jobs; it did not rerun training.
+
+During registration, Claude's Auto classifier first denied the command; the
+user authorized it directly in that chat. The subsequent completion message,
+ACK, result reads, and completion proceeded automatically. GPUOps neither changes
+permission settings nor bypasses permission prompts. A returned peer message
+must operate within the user's authorization in the original conversation.
+This establishes continuation after the original chat is loaded again, not
+automatic app launch or loading an unloaded/archived chat. OS reboot remains
+unverified.
 
 **Antigravity** uses the app's bundled `language_server agentapi send-message`.
 Each attempt reads a live `~/.gemini/antigravity/daemon/hub_*.json`, temporarily
@@ -265,7 +280,7 @@ groups returned to the original desktop chat. The Agent registered without
 `target`, read saved remote metrics, acknowledged three events, and completed
 analysis visibly in the GUI. A source-checkout checker round delivered the
 events with two SSH queries; the existing scheduled checker sent all three
-analysis-complete emails (SMTP acceptance, inbox confirmation pending).
+analysis-complete emails; the user confirmed receiving all three.
 The scalar jobs exercised GPU allocation and release, not CUDA computation.
 The daemon discovery files
 are internal interfaces; other client versions and full app/OS restart paths

@@ -42,7 +42,7 @@ Read `server.id` from the result and `gpuops server list --json` for the current
 fleet. A fresh installation has an empty registry at
 `~/.config/gpuops/servers.json`.
 
-Registration does not install any Agent skill. Codex users can opt in with
+Codex users can install the Agent skill with
 `gpuops skill install --json` for the current account, or
 `gpuops skill install --server ID --json` for a registered server's SSH account.
 The default destination is `~/.codex/skills/gpu-infra`; if `CODEX_HOME` is set in
@@ -54,10 +54,9 @@ managed jobs, then stops the Worker and removes the local registration while
 preserving the remote installation, history, and experiment data. Add
 `--server ID` to queries when you want a narrower scope.
 
-`status` retains its monitoring exit code: zero means GPU collection succeeded,
-not that scheduling is ready. Inspect each server's `worker.ready` explicitly.
-Worker failure leaves successful GPU data visible, and one offline server does
-not remove the other server's results.
+`status` exits zero when GPU collection succeeds; check each server's
+`worker.ready` for scheduling readiness. GPU data stays visible when a Worker
+fails, and one offline server does not hide the other servers' results.
 
 Command defaults depend on where the CLI runs. The control machine selects all
 registered servers for unqualified `status`, `doctor`, `queue`, `history`, and `fleet`, and
@@ -79,13 +78,10 @@ scope.
 When there is only one candidate host (the normal server-local case), `auto`
 queues on that host without requiring a GPU sample. Explicit-host submission
 works the same way. Worker readiness is still required; actual GPU allocation
-waits for two reliable idle samples. Multi-host automatic placement still needs
-fresh GPU evidence to choose a host. `status`, `doctor`, and job explanations
-read the Worker's shared sample; repeating them does not force a new GPU query.
-
-Controllers, server CLIs, and running Workers use the same published release.
-A `version_mismatch` requires deployment of that release; do not try removed
-flags or older RPC variants. `submit --server ID` overrides the manifest target.
+waits for two reliable idle samples. Multi-host automatic placement needs fresh
+GPU evidence to choose a host. `status`, `doctor`, and job explanations read the
+Worker's shared sample, so repeating them is cheap. `submit --server ID`
+overrides the manifest target.
 
 ## Active Jobs and History
 
@@ -104,8 +100,7 @@ to `history --cursor CURSOR --json`, keeping the same project/server filters.
 If a host is unavailable, successful host data remains visible with
 `outcome: partial`, `ok: false`, and exit code 1. History suppresses its next
 cursor in that case to avoid skipping records; retry the same page after the
-host recovers. An empty history page with failed hosts is not proof that no
-jobs exist. Queries never create or replay a submission journal.
+host recovers before concluding that the failed hosts have no jobs.
 
 ## Describe the Experiment Once
 
@@ -139,11 +134,8 @@ reconciliation does not move the job to another server.
 `expected_duration` is optional and supplies ETA evidence, not a time limit.
 Commands are argument arrays; `working_directory` is an absolute remote path.
 Set `runtime.conda_environment` or `runtime.environment` only when the experiment
-needs them. The example assumes the code and environment already exist on the
-destination.
-GPU Ops does not synchronize code, environments, datasets, or checkpoints; the
-Agent remains responsible for preparing them on the destination before
-submission.
+needs them. Prepare the code, environment, datasets, and checkpoints on the
+destination before submission; GPUOps runs the prepared command.
 
 ## Optional Progress Reporting
 
@@ -151,15 +143,14 @@ When creating training code that the Agent controls, `GPUOPS_PROGRESS` stdout
 records can improve ETA when the work has a meaningful counter.
 Use the standard-library [example emitter](../examples/progress.example.py) and
 follow the [structured progress contract](PROGRESS.md). Existing runs and
-third-party trainers do not need to be changed solely for compliance.
+third-party trainers can stay unchanged.
 
 Report cumulative work across the entire declared phase, normally every 10-30
 seconds and at phase transitions. Only rank 0 should print in distributed runs.
 `train` and `training` mean the whole training phase; other names receive an
 explicit phase ETA. Unknown totals, stale sequences, sequences with no measured
-advance, and fewer than two consistent samples remain unknown rather than
-receiving a fabricated estimate. This reporting requires no manifest option or
-extra package.
+advance, and fewer than two consistent samples remain unknown. This reporting
+requires no manifest option or extra package.
 
 ## Recover the Same Submission
 
@@ -189,45 +180,53 @@ new one. `reconcile` without a run ID explicitly retries **all** pending entries
 | `failed` | Inspect the recorded failure reason and managed logs before another run. |
 | `unknown` | Evidence is incomplete, mixed, stale, or unsupported by the installed Worker. |
 
-Explanations describe evidence at `observed_at`; a single GPU sample cannot
-promise an immediate start. The scheduler still confirms availability twice.
-Queries never retry submissions or alter queued jobs. Unknown external-process
-ETA remains unknown. Cancellation only applies to GPUOps-managed jobs; do not
-kill an unmanaged process or bypass the queue with direct SSH execution.
+Explanations describe evidence at `observed_at`; the scheduler confirms
+availability twice before launch. Cancellation applies to GPUOps-managed jobs;
+do not kill an unmanaged process or bypass the queue with direct SSH execution.
 
 For installation and repair, see
 [Remote Worker](https://github.com/OHHHHHHei/GPUOps/blob/main/docs/REMOTE_WORKER.md). For the acceptance procedure, see
 [Roadmap](https://github.com/OHHHHHHei/GPUOps/blob/main/docs/ROADMAP.md). Published checks and limits are summarized in
 [Release validation](https://github.com/OHHHHHHei/GPUOps/blob/main/docs/VALIDATION.md).
 
-## Experimental completion follow-up
+## Return to the original chat after completion
 
-When explicitly requested, an Agent can register one job with
-`gpuops followup add ...` or a cross-server `gpuops.followup/v1` group with
-`gpuops followup register FILE --json`. `per_job` emits an event for each
-terminal member; `all_terminal` waits for every success, failure, or
-cancellation. The caller must supply the action, context, and routing—GPUOps
-does not infer research intent.
+By default, after submitting experiments from a Codex Desktop, Claude Code
+Desktop, or Antigravity chat, register a follow-up for them unless the user says
+not to. GPUOps waits for the jobs and brings their results back to that chat,
+which analyzes them with its existing context.
 
-Harness continuation (`resume`) and human email (`none`, `terminal`, or
-`analysis_complete`) are independent. Queue/adapter acceptance is not proof of
-model execution: the target session must acknowledge the event and record a
-nonempty completion summary. `acknowledge` returns `first_receipt`; proceed
-only when it is true. Stop repeated messages before reading results or sending
-notifications. External adapters use `--session` for ACKs.
+Register once, after every submission in the batch is accepted, with
+`gpuops followup register FILE --json` and no `target`; GPUOps detects the
+current client and session. In the `gpuops.followup/v1` document:
 
-Read [follow-up setup, adapter protocol, and limitations](FOLLOWUPS.md) first.
-Automatic checking is currently macOS-only. `register` can infer the current
-Codex Desktop, Claude Code Desktop, or Antigravity session when `target` is
-omitted. Do not guess the session from a project path. `add` is a Codex-only
-shortcut. Each desktop has explicit loaded-session, permission-mode, and
-restart boundaries documented in the follow-up guide.
+- `jobs` lists the submitted `run_id`s and their `server_id`s; they may span
+  servers.
+- `mode` is `all_terminal` when the results are analyzed together and `per_job`
+  when each result is handled on its own. Success, failure, and cancellation
+  all count as finished.
+- `action` and `context` come from the conversation: what to read, what to
+  compare, which research records to update, and what to report. GPUOps carries
+  them and does not infer research intent.
+- `notify` stays `none` unless the user asked for email; `terminal` mails when
+  the jobs finish and `analysis_complete` mails after the analysis is recorded.
+
+If registration reports that the follow-up is unbound, the current chat cannot
+be resumed automatically; tell the user and continue without it. The shared
+macOS checker does the waiting; do not sleep in a loop or start a separate CLI
+conversation. In Codex, `gpuops followup add RUN_ID --action TEXT --json` is a
+single-job shortcut.
+
+When the completion message arrives, run `gpuops followup acknowledge EVENT_ID
+--json` first and continue only when `first_receipt` is true. Read the saved
+results, perform the action, report in the same chat, then record
+`gpuops followup complete EVENT_ID --summary TEXT --json`. External adapters
+pass `--session` to both commands. See [follow-ups](FOLLOWUPS.md) for supported
+client versions and the adapter protocol.
 
 ## Account and Ownership Scope
 
 One Worker and its queue coordinate jobs under one trusted Unix account on a
-server. Other users' visible compute processes make a GPU unavailable, but
-GPUOps cannot enforce an exclusive reservation against those users or programs
-that launch outside its queue. Do not treat the account boundary as a
-multi-tenant authorization service. Cancellation controls only verified
-GPUOps-managed processes.
+server. Other users' visible compute processes make a GPU unavailable; GPUOps
+leases coordinate only jobs submitted through its queue. Cancellation controls
+only verified GPUOps-managed processes.

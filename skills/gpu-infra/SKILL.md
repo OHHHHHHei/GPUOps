@@ -1,6 +1,6 @@
 ---
 name: gpu-infra
-description: Inspect GPU resources and manage queued experiments on registered Linux NVIDIA servers through GPUOps. Use for GPU status, process ownership, submission, queues, managed logs, progress estimates, recovery, or cancellation.
+description: Inspect GPU resources and manage queued experiments on registered Linux NVIDIA servers through GPUOps. Use for GPU status, process ownership, submission, queues, managed logs, progress estimates, recovery, cancellation, or returning to the original chat when experiments finish.
 ---
 
 # GPU Infra
@@ -22,7 +22,7 @@ ship with this skill. No MCP server or Agent-specific runtime is needed.
 Use `server list --json` for registered hosts. A fresh registry is empty;
 `server add SSH_ALIAS --json` connects an existing OpenSSH alias, installing or
 starting a Worker if needed, and upgrades an installation that runs a different
-release. Add does not install a skill or prepare experiment assets.
+release.
 
 Unqualified queries cover registered servers on a control machine and only the
 current server on an installed server. `--server ID` selects a host explicitly;
@@ -30,13 +30,13 @@ a peer needs configured SSH access. Submission follows `resources.host` in the
 manifest. Automatic host selection considers the registered fleet on the control
 machine and the current server by default on an installed server.
 
-- `status --json`: GPU/process observations and independent `worker.ready`.
-  Monitoring exit code zero does not prove Worker readiness.
+- `status --json`: GPU/process observations. Check each server's `worker.ready`
+  for scheduling readiness.
 - `doctor --json` and `fleet status --json`: connectivity and Worker diagnostics.
-  Read operations use shared GPU samples and do not start NVIDIA probes.
 - `queue --json`: active summaries. `history --json`: recent terminal jobs,
   paginated with `next_cursor`; keep the same filters when continuing. A partial
-  result retains successful hosts and is not proof that failed hosts are empty.
+  result lists failed hosts in its errors; query them again before concluding
+  they have no jobs.
 - `job RUN_ID --json` and `logs RUN_ID --tail-bytes 65536 --json`: one job's
   state, explanation, next action, and bounded output. A queued job may have no
   log yet. Unknown or stale evidence stays unknown.
@@ -44,8 +44,8 @@ machine and the current server by default on an installed server.
 ## Submit Within the Authorized Scope
 
 Prepare the experiment's code, environment, data, and checkpoints on the chosen
-server. GPUOps does not synchronize them. Use a `gpuops/v1` manifest with an
-argv command and an absolute remote `working_directory`.
+server before submitting. Use a `gpuops/v1` manifest with an argv command and an
+absolute remote `working_directory`.
 
 Default to automatic GPU allocation: set the prepared, authorized
 `resources.host`, omit `resources.gpus`, and request the needed `gpu_count`
@@ -57,12 +57,46 @@ currently idle IDs. Insufficient capacity means waiting in the queue.
 Honor explicit physical GPU choices with `resources.gpus`. Use `host: "auto"`
 only when every candidate is authorized and prepared. Ask only when execution
 would exceed the established host/resource scope or a material requirement is
-missing. Idle capacity alone does not authorize a new experiment.
+missing. Start new experiments only when the user asked for them, not because
+GPUs are idle.
 
 Use `submit job.json --json` and retain `run_id` and `submission_state`.
 Validation and Worker-readiness checks are automatic. `validate` is optional.
 A ready Worker can queue an explicit-host job, or a sole-candidate automatic
-job, without GPU telemetry; launch still waits for reliable samples.
+job, without GPU telemetry; launch waits for reliable samples.
+
+## Return to the Original Chat (default)
+
+After submitting experiments from a Codex Desktop, Claude Code Desktop, or
+Antigravity chat, register a follow-up for them unless the user says not to.
+GPUOps waits for the jobs and brings their results back to this chat, where you
+analyze them with the existing context.
+
+Register once, after every submission in the batch is `accepted`, with
+`followup register FILE --json` (or `-` for stdin) and no `target`; GPUOps
+binds the current chat. Write a `gpuops.followup/v1` document
+([example](examples/followup.example.json)) with:
+
+- `jobs`: the submitted `run_id`s with their `server_id`s.
+- `mode`: `all_terminal` when the results are compared or analyzed together
+  (a sweep, an ablation, baseline versus candidate); `per_job` when each result
+  is handled on its own or the user asks for it.
+- `action`: what to do with the results, taken from the conversation: which
+  saved metrics or artifacts to read, what to compare them against, which
+  research records to update, and what to report here.
+- `context`: the research question and the file locations needed later.
+- `notify`: `none` unless the user asked for email; `analysis_complete` sends
+  one after you record the analysis.
+
+If registration reports that the follow-up is unbound, this chat cannot be
+resumed automatically; tell the user and continue without it. Do not wait in a
+sleep loop or start a separate CLI conversation; the shared checker waits.
+
+When a completion message arrives, run `followup acknowledge EVENT_ID --json`
+first and continue only when `first_receipt` is true. Read the saved results,
+perform the action, report the analysis here, then record
+`followup complete EVENT_ID --summary TEXT --json`. See
+[follow-ups](docs/FOLLOWUPS.md) for supported clients and commands.
 
 ## Recover and Cancel
 
@@ -84,24 +118,9 @@ process merely because it appears in `status`. Inspect Worker, queue, job, and
 logs when scheduling fails; do not bypass the queue with direct execution
 without explicit authorization.
 
-One trusted Unix account shares the Worker queue. Other users' processes are
-observed and avoided; GPUOps leases do not enforce exclusivity against them or
-programs outside the queue. Accepted work continues while the control machine
-is offline. Workers need an explicit `fleet start` after a server reboot.
-
-## Optional Original-chat Follow-up
-
-For an explicitly requested return to the original chat after experiment
-completion, use `followup register FILE --json`; see
-[follow-up setup and boundaries](docs/FOLLOWUPS.md). Registration can infer the
-current Codex Desktop, Claude Code Desktop, or Antigravity session; omit `target`
-for automatic binding. Supply the user's follow-up action and choose `per_job`
-or `all_terminal`. Model continuation and human email are independent.
-On delivery, run `followup acknowledge EVENT_ID --json` first and continue only
-when `first_receipt` is true. Report analysis in the same chat, then record
-`followup complete EVENT_ID --summary TEXT --json`. Never create a separate CLI
-conversation and present it as desktop continuation. Waiting belongs to the
-existing checker, not an Agent sleep loop.
+One trusted Unix account shares the Worker queue, and other users' processes
+are avoided. Accepted work continues while the control machine is offline.
+Workers need an explicit `fleet start` after a server reboot.
 
 ## Optional ETA and Web
 
@@ -110,7 +129,7 @@ ETA requires evidence from readable progress logs or an optional
 process age. For new training code with a meaningful counter, see
 [progress contract](docs/PROGRESS.md) and the standard-library
 [emitter](examples/progress.example.py). Report cumulative phase work and use
-rank 0 in distributed training. Existing and third-party code need no change.
+rank 0 in distributed training.
 
 The Web console starts with `web` and accepts loopback binds only. It displays
-estimates with their source; estimates do not reserve GPUs or affect scheduling.
+estimates with their source.

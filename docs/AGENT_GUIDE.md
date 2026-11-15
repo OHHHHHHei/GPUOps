@@ -212,13 +212,16 @@ does not infer research intent.
 Harness continuation (`resume`) and human email (`none`, `terminal`, or
 `analysis_complete`) are independent. Queue/adapter acceptance is not proof of
 model execution: the target session must acknowledge the event and record a
-nonempty completion summary. External sessions use `--session` for those ACKs.
+nonempty completion summary. `acknowledge` returns `first_receipt`; proceed
+only when it is true. Stop repeated messages before reading results or sending
+notifications. External adapters use `--session` for ACKs.
 
 Read [follow-up setup, adapter protocol, and limitations](FOLLOWUPS.md) first.
-Automatic checking is currently macOS-only. The original Codex chat must still
-be loaded for automatic queue consumption, and a generic adapter does not prove
-native Claude Code, DeepSeek, or original-session support. Group paths are
-locally tested but have not received a new live deployment acceptance.
+Automatic checking is currently macOS-only. `register` can infer the current
+Codex Desktop, Claude Code Desktop, or Antigravity session when `target` is
+omitted. Do not guess the session from a project path. `add` is a Codex-only
+shortcut. Each desktop has explicit loaded-session, permission-mode, and
+restart boundaries documented in the follow-up guide.
 
 ## Account and Ownership Scope
 

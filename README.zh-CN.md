@@ -188,9 +188,11 @@ gpuops followup register examples/followup.example.json --json
 `terminal`、`analysis_complete`）相互独立。原 Agent 提供动作和上下文，GPUOps
 只负责观察与路由，不负责形成研究判断。
 
-此前版本的单任务和跨服务器整组 Codex 接续已通过真实验收；本次 0.4 的统一后台仍待部署验收，外部适配器目前只有本地协议测试。Codex 自动接续仍要求原聊天已在桌面中加载。通用外部
-适配器只是 JSON/回执接口，不代表已原生支持 Claude Code 或 DeepSeek 会话。
-协议、显式接收/完成 ACK、邮件配置和适用边界见[后续动作文档](docs/FOLLOWUPS.md)。
+在原聊天里登记时可以省略 `target`，GPUOps 会自动识别 Codex Desktop、
+Claude Code Desktop 或 Antigravity 的会话。三者复用现有统一检查器，均已观察到
+原桌面聊天自动接续并显示分析结果。Codex 仍要求原聊天已加载；Claude 和
+Antigravity 依赖客户端内部发现接口，重启等场景的验收范围分别记录。
+已验证版本、适用边界、接收/完成确认和邮件配置见[后续动作文档](docs/FOLLOWUPS.md)。
 
 ## Mac 上的 Worker 停止提醒
 

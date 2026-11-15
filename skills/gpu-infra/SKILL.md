@@ -89,6 +89,20 @@ observed and avoided; GPUOps leases do not enforce exclusivity against them or
 programs outside the queue. Accepted work continues while the control machine
 is offline. Workers need an explicit `fleet start` after a server reboot.
 
+## Optional Original-chat Follow-up
+
+For an explicitly requested return to the original chat after experiment
+completion, use `followup register FILE --json`; see
+[follow-up setup and boundaries](docs/FOLLOWUPS.md). Registration can infer the
+current Codex Desktop, Claude Code Desktop, or Antigravity session; omit `target`
+for automatic binding. Supply the user's follow-up action and choose `per_job`
+or `all_terminal`. Model continuation and human email are independent.
+On delivery, run `followup acknowledge EVENT_ID --json` first and continue only
+when `first_receipt` is true. Report analysis in the same chat, then record
+`followup complete EVENT_ID --summary TEXT --json`. Never create a separate CLI
+conversation and present it as desktop continuation. Waiting belongs to the
+existing checker, not an Agent sleep loop.
+
 ## Optional ETA and Web
 
 ETA requires evidence from readable progress logs or an optional

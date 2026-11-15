@@ -119,6 +119,18 @@ def test_adapter_ack_contract_and_duplicate_event_id(tmp_path, monkeypatch, foll
             "session_continuity": "native",
         },
         {
+            "name": "claude-desktop",
+            "idempotent": False,
+            "builtin": True,
+            "session_continuity": "native",
+        },
+        {
+            "name": "antigravity",
+            "idempotent": False,
+            "builtin": True,
+            "session_continuity": "native",
+        },
+        {
             "name": "test-harness",
             "idempotent": True,
             "builtin": False,

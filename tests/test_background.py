@@ -35,6 +35,8 @@ class Launchd:
 
 @pytest.fixture
 def app(tmp_path, monkeypatch):
+    for variable in ("CODEX_THREAD_ID", "CLAUDE_CODE_SESSION_ID", "ANTIGRAVITY_CONVERSATION_ID"):
+        monkeypatch.delenv(variable, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(background.sys, "platform", "darwin")
     launchd = Launchd()
@@ -434,10 +436,10 @@ def test_smtp_writeback_preserves_concurrent_completion(app, monkeypatch, fails)
         polling = pool.submit(run, bg)
         assert entered.wait(3)
         try:
-            completed = pool.submit(
+            completed, first_receipt = pool.submit(
                 store.acknowledge, row.id, summary="saved analysis", session_id="original"
             ).result(2)
-            assert completed.status == "completed"
+            assert completed.status == "completed" and first_receipt
             assert pool.submit(main, ["followup", "disable"]).result(2) == 0
             assert launchd.loaded
         finally:

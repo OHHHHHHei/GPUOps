@@ -5,6 +5,11 @@ for tested behavior and limits.
 
 ## 0.4.0 — Unreleased
 
+- Resume original Claude Code Desktop and Antigravity chats through the shared
+  checker. Infer desktop/session identity during registration and receipt;
+  return `first_receipt` to distinguish new work from a duplicate message.
+  See [tested desktop boundaries](docs/FOLLOWUPS.md).
+
 - Require one published release across controllers, server CLIs and running
   Workers. Report a version mismatch instead of probing optional features or
   retrying older RPC variants; `server add` upgrades a different installed release.

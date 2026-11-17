@@ -2,6 +2,8 @@
 
 import json
 import os
+import subprocess
+import sys
 import time
 from datetime import timedelta
 
@@ -135,3 +137,12 @@ def test_slow_sample_does_not_block_control_or_grant_resources(tmp_path, monkeyp
         release.touch()
         for child in set(children):
             child.wait(timeout=5)
+
+
+def test_sampling_child_does_not_import_pydantic():
+    # The child starts every few seconds per GPU; pydantic would cost ~0.1 s each.
+    check = (
+        "import sys, gpuops.worker.sampling_child; "
+        "sys.exit(any(name.startswith('pydantic') for name in sys.modules))"
+    )
+    assert subprocess.run([sys.executable, "-c", check], check=False).returncode == 0

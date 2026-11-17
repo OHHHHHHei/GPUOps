@@ -218,6 +218,7 @@ class AsyncGpuSampler:
                     state.device, "gpu_query_timeout", "GPU sampling deadline exhausted"
                 )
             return
+        started_at = state.started_at
         state.process = None
         state.started_at = None
         if state.timed_out:
@@ -235,7 +236,11 @@ class AsyncGpuSampler:
             state.latest = result
             state.failure_backoff = SUCCESS_INTERVAL_SECONDS
             state.timeout_backoff = TIMEOUT_BACKOFF_INITIAL_SECONDS
-            state.next_attempt_at = now + SUCCESS_INTERVAL_SECONDS
+            # Count the interval from launch: the child finishes in well under a
+            # second but is only reaped on the next 5-second Worker tick.
+            state.next_attempt_at = (now if started_at is None else started_at) + (
+                SUCCESS_INTERVAL_SECONDS
+            )
         else:
             state.latest = result
             if result.get("error_code") == "gpu_query_timeout":
@@ -378,6 +383,7 @@ class AsyncGpuSampler:
                     "data": None,
                     "error_code": "gpu_discovery_failed",
                 },
+                durable=False,
             )
             return
         gpus: list[GpuResource] = []
@@ -466,6 +472,8 @@ class AsyncGpuSampler:
                 "data": {"gpus": raw_gpus, "collected_at": now.isoformat()},
                 "error_code": None,
             },
+            # Rewritten every tick and stale after 15 seconds; a crash loses nothing.
+            durable=False,
         )
 
     def _read_cache(self) -> dict[str, Any] | None:

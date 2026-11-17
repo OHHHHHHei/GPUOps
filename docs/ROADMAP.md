@@ -21,7 +21,7 @@ acceptance check. GPUOps is not published to PyPI.
 ## Existing Capabilities
 
 - Shared GPU observations, independent per-device sampling and retries, device
-  UUID binding, PCI checks, and idle-only CUDA initialization checks.
+  UUID binding, PCI checks, and CUDA initialization checks before leasing.
 - Durable queued submissions, bounded logs, managed cancellation, detached
   supervisors, Worker recovery, and reconciliation of uncertain submissions.
 - Registered SSH servers and direct local CLI access on an installed server.

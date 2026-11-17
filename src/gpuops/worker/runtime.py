@@ -441,7 +441,8 @@ def request_worker_stop(
 
 
 def write_heartbeat(path: Path, heartbeat: WorkerHeartbeat) -> None:
-    atomic_write_json(path, heartbeat.model_dump(mode="json"))
+    # The heartbeat is rewritten every tick and expires after 75 seconds.
+    atomic_write_json(path, heartbeat.model_dump(mode="json"), durable=False)
 
 
 def spawn_detached_worker(
@@ -494,12 +495,15 @@ def spawn_detached_worker(
             stderr_handle.close()
 
 
-def atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
-    """Write sorted, ASCII-escaped runtime JSON with a trailing newline durably."""
+def atomic_write_json(path: Path, payload: Mapping[str, Any], *, durable: bool = True) -> None:
+    """Write sorted, ASCII-escaped runtime JSON with a trailing newline.
+
+    Pass ``durable=False`` for status files that are rewritten every few seconds.
+    """
 
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     encoded = (json.dumps(payload, ensure_ascii=True, sort_keys=True) + "\n").encode("utf-8")
-    atomic_write_bytes(path, encoded)
+    atomic_write_bytes(path, encoded, durable=durable)
 
 
 def _read_json_object(path: Path) -> dict[str, Any] | None:

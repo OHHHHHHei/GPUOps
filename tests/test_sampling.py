@@ -760,7 +760,8 @@ def test_failed_card_recovers_and_resets_backoff(tmp_path: Path, monkeypatch) ->
     sampler.tick()
     assert state.latest["error_code"] is None
     assert state.failure_backoff == 5
-    assert state.next_attempt_at == pytest.approx(10.3)
+    # The next sample is due five seconds after the successful launch at 5.2.
+    assert state.next_attempt_at == pytest.approx(10.2)
 
 
 def test_child_reported_timeout_cools_down_then_success_resets_backoff(
@@ -811,7 +812,7 @@ def test_child_reported_timeout_cools_down_then_success_resets_backoff(
     sampler.tick()
     assert state.latest["error_code"] is None
     assert state.timeout_backoff == 60
-    assert state.next_attempt_at == pytest.approx(65.2)
+    assert state.next_attempt_at == pytest.approx(65.1)
 
     monotonic[0] = 65.2
     sampler.tick()

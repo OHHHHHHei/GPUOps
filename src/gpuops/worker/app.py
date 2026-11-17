@@ -22,6 +22,7 @@ from gpuops.core.storage import StorageBudget
 from gpuops.models import utc_now
 from gpuops.notifications import JobNotifier
 from gpuops.version import release_mismatch_message
+from gpuops.worker.cuda_readiness import CudaReadiness
 from gpuops.worker.runtime import (
     RuntimePaths,
     WorkerHeartbeat,
@@ -120,6 +121,7 @@ def build_worker_runtime(
         worker_id=worker_id,
         settings=SchedulerSettings(),
         confirmation_provider=cached_probe,
+        gpu_ready=CudaReadiness(),
     )
     supervisor = DurableJobSupervisor(state / "runs", storage=storage)
     worker = Worker(store, scheduler, DurableSupervisorLauncher(supervisor))

@@ -1,17 +1,23 @@
-"""One-shot device sampler whose inherited descriptor owns the query lock."""
+"""One-shot device sampler whose inherited descriptor owns the query lock.
+
+It runs every few seconds per GPU, so it imports only standard-library code;
+the long-lived Worker validates the result it writes.
+"""
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 from collections.abc import Sequence
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from gpuops.file_io import atomic_write_bytes
 from gpuops.worker.devices import GpuDevice
 from gpuops.worker.probe import LocalGpuProbe
-from gpuops.worker.runtime import atomic_write_json
 
 DEVICE_QUERY_BUDGET_SECONDS = 6.0
 
@@ -41,13 +47,21 @@ def run_sample(
             "uuid": device.uuid,
             "pci_bus": device.pci_bus,
         },
-        "snapshot": sample.snapshot.model_dump(mode="json"),
+        "snapshot": sample.snapshot_payload,
         "data": sample.data,
         "error_code": sample.error_code,
     }
     if sample.error_code is not None:
-        payload["error"] = sample.snapshot.error or "GPU query failed"
-    atomic_write_json(result_path, payload)
+        payload["error"] = sample.snapshot_payload.get("error") or "GPU query failed"
+    encoded = json.dumps(payload, ensure_ascii=True, sort_keys=True, default=_isoformat) + "\n"
+    # The Worker reads this file once after the process exits; it need not survive a crash.
+    atomic_write_bytes(result_path, encoded.encode("utf-8"), durable=False)
+
+
+def _isoformat(value: Any) -> str:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    raise TypeError(f"cannot serialize {type(value).__name__}")
 
 
 def main(argv: Sequence[str] | None = None) -> int:

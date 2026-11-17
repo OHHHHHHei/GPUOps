@@ -1,4 +1,9 @@
-"""Host-local GPU resource probe for the worker scheduler."""
+"""Host-local GPU resource probe for the worker scheduler.
+
+The per-device sampler runs this module in a short-lived subprocess every few
+seconds, so it imports only the standard library. Callers that want the typed
+snapshot read ``GpuProbeSample.snapshot``, which validates on access.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +11,6 @@ import csv
 import os
 import pwd
 import subprocess
-import sys
 import time
 from collections.abc import Callable, Sequence
 from contextlib import suppress
@@ -15,29 +19,38 @@ from datetime import datetime, timezone
 from io import StringIO
 from math import isfinite
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from gpuops.config import GPU_QUERY_TIMEOUT_SECONDS
-from gpuops.core.resources import (
+from gpuops.gpu_policy import (
     DEFAULT_IDLE_MEMORY_BASELINE_MIB,
     DEFAULT_IDLE_MEMORY_TOLERANCE_MIB,
     DEFAULT_IDLE_UTILIZATION_THRESHOLD,
-    GpuResource,
-    GpuTelemetry,
-    ResourceEligibilityPolicy,
-    ServerResourceSnapshot,
+    GPU_QUERY_TIMEOUT_SECONDS,
+    validate_idle_limits,
 )
-from gpuops.models import utc_now
 from gpuops.worker.devices import GpuDevice
+
+if TYPE_CHECKING:
+    from gpuops.core.resources import ServerResourceSnapshot
 
 CommandRunner = Callable[..., subprocess.CompletedProcess[str]]
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 @dataclass(frozen=True, slots=True)
 class GpuProbeSample:
-    snapshot: ServerResourceSnapshot
+    snapshot_payload: dict[str, Any]
     data: dict[str, Any] | None
     error_code: str | None
+
+    @property
+    def snapshot(self) -> ServerResourceSnapshot:
+        from gpuops.core.resources import ServerResourceSnapshot
+
+        return ServerResourceSnapshot.model_validate(self.snapshot_payload)
 
 
 class ProbeCommandError(RuntimeError):
@@ -50,10 +63,6 @@ class ProbeBudgetExhausted(ProbeCommandError):
 
 class DeviceUnavailable(ProbeCommandError):
     """The discovered PCI device is no longer readable."""
-
-
-class CudaUnavailable(ProbeCommandError):
-    """An idle GPU cannot be initialized through CUDA."""
 
 
 def check_pci_config(device: GpuDevice, sysfs_root: Path = Path("/sys/bus/pci/devices")) -> None:
@@ -86,12 +95,12 @@ def check_pci_config(device: GpuDevice, sysfs_root: Path = Path("/sys/bus/pci/de
 
 
 class LocalGpuProbe:
-    """Read local GPU telemetry and check device readiness.
+    """Read one GPU's telemetry after checking its PCI identity.
 
     Production per-device sampling checks PCI config first, then scoped
-    nvidia-smi telemetry, then CUDA initialization for an idle GPU. A GPU is idle
-    only when it has no compute processes, low utilization, and used memory
-    within the calibrated baseline plus tolerance.
+    nvidia-smi telemetry. A GPU is idle only when it has no compute processes,
+    low utilization, and used memory within the calibrated baseline plus
+    tolerance. CUDA readiness is checked separately, just before leasing.
     """
 
     def __init__(
@@ -99,7 +108,7 @@ class LocalGpuProbe:
         server_id: str,
         *,
         runner: CommandRunner = subprocess.run,
-        clock: Callable[[], datetime] = utc_now,
+        clock: Callable[[], datetime] = _utc_now,
         monotonic_clock: Callable[[], float] = time.monotonic,
         sample_timeout_seconds: float = GPU_QUERY_TIMEOUT_SECONDS,
         idle_utilization_threshold: float = DEFAULT_IDLE_UTILIZATION_THRESHOLD,
@@ -111,10 +120,8 @@ class LocalGpuProbe:
             raise ValueError("server_id cannot be empty")
         if sample_timeout_seconds <= 0:
             raise ValueError("sample_timeout_seconds must be positive")
-        policy = ResourceEligibilityPolicy(
-            idle_utilization_threshold=idle_utilization_threshold,
-            idle_memory_baseline_mib=idle_memory_baseline_mib,
-            idle_memory_tolerance_mib=idle_memory_tolerance_mib,
+        validate_idle_limits(
+            idle_utilization_threshold, idle_memory_baseline_mib, idle_memory_tolerance_mib
         )
         self.server_id = server_id
         self.runner = runner
@@ -124,7 +131,6 @@ class LocalGpuProbe:
         self.idle_utilization_threshold = idle_utilization_threshold
         self.idle_memory_baseline_mib = idle_memory_baseline_mib
         self.idle_memory_tolerance_mib = idle_memory_tolerance_mib
-        self.eligibility_policy = policy
         self.pci_checker = pci_checker if pci_checker is not None else check_pci_config
 
     def sample_device(self, device: GpuDevice) -> GpuProbeSample:
@@ -137,42 +143,36 @@ class LocalGpuProbe:
             self._require_budget(deadline)
             stage = f"nvidia-smi[{device.pci_bus}]"
             snapshot, data = self._snapshot_from_nvidia_device(device, deadline)
-            if snapshot.gpus[0].idle:
-                stage = f"cuda[{device.uuid}]"
-                self._check_cuda(device, deadline)
             self._require_budget(deadline)
-            return GpuProbeSample(snapshot=snapshot, data=data, error_code=None)
+            return GpuProbeSample(snapshot_payload=snapshot, data=data, error_code=None)
         except ProbeBudgetExhausted as error:
             error_code = "gpu_query_timeout"
             error_text = self._error_text(error)
         except DeviceUnavailable as error:
             error_code = "gpu_device_unavailable"
             error_text = self._error_text(error)
-        except CudaUnavailable as error:
-            error_code = "gpu_cuda_unavailable"
-            error_text = self._error_text(error)
         except Exception as error:
             error_code = "gpu_query_failed"
             error_text = self._error_text(error)
         message = f"{stage}: {error_text}"
         return GpuProbeSample(
-            snapshot=self._unhealthy_snapshot([message]),
+            snapshot_payload=self._unhealthy_snapshot([message]),
             data=None,
             error_code=error_code,
         )
 
-    def _unhealthy_snapshot(self, errors: list[str]) -> ServerResourceSnapshot:
-        return ServerResourceSnapshot(
-            server_id=self.server_id,
-            sampled_at=self.clock(),
-            healthy=False,
-            error="; ".join(errors),
-            gpus=[],
-        )
+    def _unhealthy_snapshot(self, errors: list[str]) -> dict[str, Any]:
+        return {
+            "server_id": self.server_id,
+            "sampled_at": self.clock(),
+            "healthy": False,
+            "error": "; ".join(errors),
+            "gpus": [],
+        }
 
     def _snapshot_from_nvidia_device(
         self, device: GpuDevice, deadline: float
-    ) -> tuple[ServerResourceSnapshot, dict[str, Any]]:
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         gpu_result = self._run(
             [
                 "nvidia-smi",
@@ -227,22 +227,23 @@ class LocalGpuProbe:
         processes = [self._process_payload(pid) for pid in process_pids.get(device.uuid, [])]
         process_count = len(processes)
         sampled_at = self.clock()
-        gpu = GpuResource(
-            index=device.index,
-            uuid=device.uuid,
-            memory_total_mib=memory_total_mib,
-            memory_used_mib=memory_used_mib,
-            utilization_percent=utilization_value,
-            process_count=process_count,
-            idle=self._is_idle(process_count, utilization_value, memory_used_mib),
-            sampled_at=sampled_at,
-        )
-        snapshot = ServerResourceSnapshot(
-            server_id=self.server_id,
-            sampled_at=sampled_at,
-            healthy=True,
-            gpus=[gpu],
-        )
+        gpu = {
+            "index": device.index,
+            "uuid": device.uuid,
+            "memory_total_mib": memory_total_mib,
+            "memory_used_mib": memory_used_mib,
+            "utilization_percent": utilization_value,
+            "process_count": process_count,
+            "idle": self._is_idle(process_count, utilization_value, memory_used_mib),
+            "sampled_at": sampled_at,
+        }
+        snapshot = {
+            "server_id": self.server_id,
+            "sampled_at": sampled_at,
+            "healthy": True,
+            "error": None,
+            "gpus": [gpu],
+        }
         raw_gpu = {
             "index": device.index,
             "uuid": device.uuid,
@@ -256,23 +257,7 @@ class LocalGpuProbe:
             "power.limit": self._optional_number(power_limit),
             "processes": processes,
         }
-        return snapshot, {"gpus": [raw_gpu], "collected_at": snapshot.sampled_at.isoformat()}
-
-    def _check_cuda(self, device: GpuDevice, deadline: float) -> None:
-        environment = os.environ.copy()
-        environment["CUDA_VISIBLE_DEVICES"] = device.uuid
-        try:
-            completed = self._run(
-                [sys.executable, "-m", "gpuops.worker.cuda_check", device.uuid],
-                deadline,
-                env=environment,
-            )
-        except ProbeBudgetExhausted:
-            raise
-        except ProbeCommandError as error:
-            raise CudaUnavailable(str(error)) from error
-        if completed.stdout.strip() != device.uuid:
-            raise CudaUnavailable("CUDA returned a different device identity")
+        return snapshot, {"gpus": [raw_gpu], "collected_at": sampled_at.isoformat()}
 
     def _is_idle(
         self,
@@ -280,34 +265,25 @@ class LocalGpuProbe:
         utilization_percent: float,
         memory_used_mib: int,
     ) -> bool:
-        return self.eligibility_policy.is_allocatable(
-            GpuTelemetry(
-                process_count=process_count,
-                utilization_percent=utilization_percent,
-                memory_used_mib=memory_used_mib,
-            )
+        # Mirrors ResourceEligibilityPolicy.classify for already-validated values.
+        return (
+            process_count == 0
+            and utilization_percent <= self.idle_utilization_threshold
+            and memory_used_mib <= self.idle_memory_baseline_mib + self.idle_memory_tolerance_mib
         )
 
-    def _run(
-        self,
-        command: Sequence[str],
-        deadline: float,
-        *,
-        env: dict[str, str] | None = None,
-    ) -> subprocess.CompletedProcess[str]:
+    def _run(self, command: Sequence[str], deadline: float) -> subprocess.CompletedProcess[str]:
         remaining = deadline - self.monotonic_clock()
         if remaining <= 0:
             raise ProbeBudgetExhausted("sampling deadline exhausted")
         try:
-            kwargs: dict[str, Any] = {
-                "capture_output": True,
-                "text": True,
-                "check": False,
-                "timeout": remaining,
-            }
-            if env is not None:
-                kwargs["env"] = env
-            completed = self.runner(list(command), **kwargs)
+            completed = self.runner(
+                list(command),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=remaining,
+            )
         except subprocess.TimeoutExpired as error:
             raise ProbeBudgetExhausted("sampling deadline exhausted") from error
         except (OSError, subprocess.SubprocessError) as error:

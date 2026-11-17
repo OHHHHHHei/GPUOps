@@ -56,3 +56,14 @@ def test_directory_sync_error_leaves_complete_replacement(tmp_path, monkeypatch)
     assert error.value.errno == errno.EIO
     assert path.read_bytes() == b"new contents\n"
     assert list(tmp_path.iterdir()) == [path]
+
+
+def test_non_durable_write_skips_fsync(tmp_path, monkeypatch):
+    synced = []
+    monkeypatch.setattr(file_io.os, "fsync", lambda descriptor: synced.append(descriptor))
+    target = tmp_path / "status.json"
+
+    file_io.atomic_write_bytes(target, b"status", durable=False)
+
+    assert target.read_bytes() == b"status"
+    assert synced == []

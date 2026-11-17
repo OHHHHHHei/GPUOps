@@ -5,6 +5,18 @@ for tested behavior and limits.
 
 ## 0.4.0 — Unreleased
 
+- Sample each GPU every five seconds as designed (it had slipped to ten) with
+  sampling children that import only the standard library, and check CUDA just
+  before leasing instead of on every idle sample. An idle 8-GPU server spends
+  roughly a quarter of the previous CPU on sampling.
+- Remove the queue event log that nothing read, skip storage scans below the
+  cleanup watermark, skip fsync for heartbeat and GPU sample files, and drop
+  the extra health call before each submission.
+- Fix `reconcile` on an installed server or a controller with no registered
+  servers. Use one GPU reservation rule, including UUIDs and expired leases, for
+  scheduling, job explanations, and automatic host selection.
+- Stop Web console polling while its tab is hidden and turn off its access log.
+
 - Resume original Claude Code Desktop and Antigravity chats through the shared
   checker. Infer desktop/session identity during registration and receipt;
   return `first_receipt` to distinguish new work from a duplicate message.

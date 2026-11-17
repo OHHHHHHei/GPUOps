@@ -13,6 +13,7 @@ from gpuops.core.scheduling import (
     ScheduleBlocker,
     assess_gpu_wait,
     assess_schedule_window,
+    reserved_gpu_indices,
 )
 from gpuops.models import JobRecord, JobStatus
 
@@ -108,12 +109,7 @@ def explain_job(
         )
     except Exception as error:
         return _unknown_explanation(snapshot_now, error)
-    reserved: set[int] = set()
-    for active_record in active:
-        if not _holds_reservation(active_record, server_id=server_id, now=snapshot_now):
-            continue
-        assert active_record.allocation is not None
-        reserved.update(active_record.allocation.gpu_indices)
+    reserved = reserved_gpu_indices(active, snapshot.gpus, server_id=server_id, now=snapshot_now)
     assessment = assess_gpu_wait(
         record.spec.resources,
         snapshot,
@@ -190,13 +186,6 @@ def _explain_nonqueued(record: JobRecord, now: datetime) -> dict[str, Any]:
         details=details,
         next_action=next_action,
     )
-
-
-def _holds_reservation(record: JobRecord, *, server_id: str, now: datetime) -> bool:
-    allocation = record.allocation
-    if allocation is None or allocation.server_id != server_id:
-        return False
-    return record.status != JobStatus.LEASED or allocation.lease_expires_at > now
 
 
 def _unknown_explanation(

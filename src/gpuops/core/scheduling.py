@@ -1,11 +1,42 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 
 from gpuops.core.resources import GpuResource, ServerResourceSnapshot
-from gpuops.models import JobRecord, ResourceRequest
+from gpuops.models import JobRecord, JobStatus, ResourceRequest
+
+ALLOCATED_STATUSES = frozenset(
+    {JobStatus.LEASED, JobStatus.STARTING, JobStatus.RUNNING, JobStatus.CANCEL_REQUESTED}
+)
+
+
+def reserved_gpu_indices(
+    records: Iterable[JobRecord],
+    gpus: Iterable[GpuResource],
+    *,
+    server_id: str,
+    now: datetime,
+) -> set[int]:
+    """Return GPU indices held on this server, following UUIDs across renumbering."""
+
+    reserved: set[int] = set()
+    uuids: set[str] = set()
+    for record in records:
+        allocation = record.allocation
+        if (
+            allocation is None
+            or allocation.server_id != server_id
+            or record.status not in ALLOCATED_STATUSES
+            or (record.status == JobStatus.LEASED and allocation.lease_expires_at <= now)
+        ):
+            continue
+        reserved.update(allocation.gpu_indices)
+        uuids.update(allocation.gpu_uuids.values())
+    reserved.update(gpu.index for gpu in gpus if gpu.uuid in uuids)
+    return reserved
 
 
 class ScheduleBlocker(str, Enum):

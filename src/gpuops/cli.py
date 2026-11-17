@@ -459,7 +459,7 @@ async def _run_control_command(args: argparse.Namespace) -> int:
             payload = _submission_payload(submitted)
         elif args.command == "reconcile":
             client = ControlClient(
-                [RemoteTarget(target.id, target.ssh_host) for target in select_targets()],
+                [RemoteTarget(target.id, target.ssh_host) for target in select_client_targets()],
                 transport,
                 journal,
             )

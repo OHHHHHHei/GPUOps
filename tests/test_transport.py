@@ -80,15 +80,7 @@ def test_submit_uses_fixed_remote_command_and_validates_record() -> None:
     job_spec = spec()
 
     def factory(request):
-        if request["method"] == "health":
-            return response(
-                request,
-                {
-                    "status": "ok",
-                    "durable": True,
-                    "worker": {"ready": True, "reason": "ready"},
-                },
-            )
+        assert request["method"] == "submit"
         record = {
             "run_id": request["params"]["run_id"],
             "spec": request["params"]["job_spec"],
@@ -112,27 +104,19 @@ def test_submit_uses_fixed_remote_command_and_validates_record() -> None:
     record = asyncio.run(transport.submit(target, "stable-run", job_spec))
 
     assert record.run_id == "stable-run"
-    assert ssh.calls[1][1] == [
+    assert ssh.calls[0][1] == [
         "~/.local/bin/gpuops",
         "remote",
         "--server-id",
         "gpu01",
     ]
-    assert [call[2]["method"] for call in ssh.calls] == ["health", "submit"]
+    assert [call[2]["method"] for call in ssh.calls] == ["submit"]
     assert all(call[2]["release"] == __version__ for call in ssh.calls)
 
 
 def test_submit_sends_email_off_without_capability_probe() -> None:
     def factory(request):
-        if request["method"] == "health":
-            return response(
-                request,
-                {
-                    "status": "ok",
-                    "durable": True,
-                    "worker": {"ready": True, "reason": "ready"},
-                },
-            )
+        assert request["method"] == "submit"
         return response(
             request,
             {
@@ -153,7 +137,7 @@ def test_submit_sends_email_off_without_capability_probe() -> None:
     )
 
     assert record.spec.metadata["gpuops.email"] == "off"
-    assert [call[2]["method"] for call in ssh.calls] == ["health", "submit"]
+    assert [call[2]["method"] for call in ssh.calls] == ["submit"]
 
 
 def test_worker_command_accepts_pretty_printed_json_document() -> None:
@@ -210,14 +194,16 @@ def test_start_checks_installed_release_without_requiring_a_running_worker(match
 
 def test_submit_rejects_a_stale_or_degraded_worker_before_enqueue() -> None:
     def factory(request):
-        return response(
-            request,
-            {
-                "status": "unavailable",
-                "durable": False,
-                "worker": {"ready": False, "reason": "heartbeat is stale"},
+        assert request["method"] == "submit"
+        return {
+            "api_version": RPC_API_VERSION,
+            "request_id": request["request_id"],
+            "ok": False,
+            "error": {
+                "code": "worker_unavailable",
+                "message": "background worker is unavailable: heartbeat is stale",
             },
-        )
+        }
 
     import asyncio
 
@@ -236,15 +222,7 @@ def test_submit_rejects_a_stale_or_degraded_worker_before_enqueue() -> None:
 
 def test_submit_preserves_definitive_remote_rejection_code() -> None:
     def factory(request):
-        if request["method"] == "health":
-            return response(
-                request,
-                {
-                    "status": "ok",
-                    "durable": True,
-                    "worker": {"ready": True, "reason": "ready"},
-                },
-            )
+        assert request["method"] == "submit"
         return {
             "api_version": RPC_API_VERSION,
             "request_id": request["request_id"],
@@ -274,16 +252,8 @@ def test_submit_classifies_release_mismatch_as_definitive(source) -> None:
     def factory(request):
         assert request["release"] == __version__
         error = "GPUOps versions must match; run gpuops deploy install --server gpu01"
-        if source == "running_worker":
-            return response(
-                request,
-                {
-                    "status": "unavailable",
-                    "durable": False,
-                    "worker": {"ready": False, "error_code": "version_mismatch", "reason": error},
-                },
-            )
-        if source == "installed_cli":
+        if source in {"installed_cli", "running_worker"}:
+            # The remote submit reports both an old CLI and an old running Worker.
             return {
                 "api_version": RPC_API_VERSION,
                 "request_id": request["request_id"],
@@ -307,7 +277,7 @@ def test_submit_classifies_release_mismatch_as_definitive(source) -> None:
         )
 
     assert caught.value.code == "version_mismatch"
-    assert [call[2]["method"] for call in ssh.calls] == ["health"]
+    assert [call[2]["method"] for call in ssh.calls] == ["submit"]
 
 
 def test_logs_missing_sample_time_is_a_protocol_error() -> None:
@@ -332,15 +302,7 @@ def test_logs_missing_sample_time_is_a_protocol_error() -> None:
 
 def test_submit_keeps_protocol_errors_ambiguous() -> None:
     def factory(request):
-        if request["method"] == "health":
-            return response(
-                request,
-                {
-                    "status": "ok",
-                    "durable": True,
-                    "worker": {"ready": True, "reason": "ready"},
-                },
-            )
+        assert request["method"] == "submit"
         return {
             "api_version": "unexpected-version",
             "request_id": request["request_id"],
@@ -365,15 +327,7 @@ def test_submit_keeps_protocol_errors_ambiguous() -> None:
 
 def test_submit_keeps_storage_quota_errors_ambiguous() -> None:
     def factory(request):
-        if request["method"] == "health":
-            return response(
-                request,
-                {
-                    "status": "ok",
-                    "durable": True,
-                    "worker": {"ready": True, "reason": "ready"},
-                },
-            )
+        assert request["method"] == "submit"
         return {
             "api_version": RPC_API_VERSION,
             "request_id": request["request_id"],

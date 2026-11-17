@@ -29,15 +29,13 @@ def spec(identifier: str, priority: str = "normal") -> JobSpec:
     )
 
 
-def test_enqueue_is_atomic_and_records_event(tmp_path) -> None:
+def test_enqueue_is_atomic(tmp_path) -> None:
     store = QueueStore(tmp_path)
     job = store.enqueue(spec("one"), now=NOW)
 
     persisted = store.get(job.run_id)
     assert persisted == job
     assert list((tmp_path / "jobs").glob("*.tmp")) == []
-    events = store.events()
-    assert [(event.sequence, event.event_type) for event in events] == [(1, "enqueued")]
 
 
 def test_gpu_uuid_conflict_is_rejected_after_device_index_changes(tmp_path) -> None:
@@ -79,7 +77,6 @@ def test_enqueue_with_stable_run_id_is_idempotent(tmp_path) -> None:
 
     assert second == first
     assert len(store.list()) == 1
-    assert [event.event_type for event in store.events()] == ["enqueued"]
 
 
 def test_stable_run_id_conflict_does_not_overwrite_original(tmp_path) -> None:
@@ -90,7 +87,7 @@ def test_stable_run_id_conflict_does_not_overwrite_original(tmp_path) -> None:
         store.enqueue(spec("different"), now=NOW, run_id="stable-id")
 
     assert store.get("stable-id") == original
-    assert len(store.events()) == 1
+    assert len(store.list()) == 1
 
 
 @pytest.mark.parametrize(
@@ -122,9 +119,7 @@ def test_queue_state_permissions_are_user_only(tmp_path) -> None:
     assert stat.S_IMODE(root.stat().st_mode) == 0o700
     assert stat.S_IMODE((root / "jobs").stat().st_mode) == 0o700
     assert stat.S_IMODE((root / "queue.lock").stat().st_mode) == 0o600
-    assert stat.S_IMODE((root / "events.jsonl").stat().st_mode) == 0o600
     assert stat.S_IMODE(next((root / "jobs").glob("*.json")).stat().st_mode) == 0o600
-    assert stat.S_IMODE((root / "event-sequence").stat().st_mode) == 0o600
 
 
 def test_queue_can_share_a_parent_state_budget(tmp_path) -> None:
@@ -143,20 +138,17 @@ def test_queue_rejects_an_unrelated_storage_budget(tmp_path) -> None:
         QueueStore(tmp_path / "queue", storage=StorageBudget(tmp_path / "other"))
 
 
-def test_event_log_rotates_to_bounded_compressed_archives(tmp_path) -> None:
-    store = QueueStore(tmp_path, event_log_max_bytes=512, event_archive_count=2)
-    for index in range(12):
-        store.enqueue(spec(f"event-{index}"), now=NOW, run_id=f"event-{index}")
+def test_leftover_event_log_files_are_removed(tmp_path) -> None:
+    (tmp_path / "events.jsonl").write_text("{}\n")
+    (tmp_path / "event-sequence").write_text("3\n")
+    (tmp_path / "event-archive").mkdir()
+    (tmp_path / "event-archive" / "events-1.jsonl.gz").write_bytes(b"old")
 
-    archives = sorted((tmp_path / "event-archive").glob("*.jsonl.gz"))
-    events = store.events()
+    QueueStore(tmp_path)
 
-    assert (tmp_path / "events.jsonl").stat().st_size <= 512
-    assert len(archives) <= 2
-    assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in archives)
-    assert [event.sequence for event in events] == sorted(event.sequence for event in events)
-    assert len({event.sequence for event in events}) == len(events)
-    assert events[-1].sequence == 12
+    assert not (tmp_path / "events.jsonl").exists()
+    assert not (tmp_path / "event-sequence").exists()
+    assert not (tmp_path / "event-archive").exists()
 
 
 def test_queue_orders_priority_then_fifo(tmp_path) -> None:
@@ -268,7 +260,7 @@ def test_expired_lease_returns_to_queue(tmp_path) -> None:
     assert len(released) == 1
     assert released[0].status == JobStatus.QUEUED
     assert released[0].allocation is None
-    assert store.events()[-1].event_type == "lease_expired"
+    assert store.get(released[0].run_id).status == JobStatus.QUEUED
 
 
 def test_valid_execution_lifecycle(tmp_path) -> None:
@@ -306,10 +298,6 @@ def test_cancel_queued_job_is_atomic_and_idempotent(tmp_path) -> None:
     assert cancelled.finished_at == NOW
     assert repeated == cancelled
     assert repeated.revision == 1
-    assert [event.event_type for event in store.events()] == [
-        "enqueued",
-        "cancel_requested",
-    ]
 
 
 def test_cancel_lease_wins_before_stale_launcher_can_start(tmp_path) -> None:

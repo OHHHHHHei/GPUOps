@@ -254,15 +254,18 @@ The remote layout is user-owned and private:
   gpu-sample-<pci-token>.lock
   gpu-sample-<pci-token>.result.json
   queue/jobs/<run-id>.json
-  queue/events.jsonl
+  queue/queue-index.sqlite3
   runs/<run-id>/{intent,receipt,result,cancellation}.json
   logs/worker/worker.log
   logs/<run-id>/console.log*
 ```
 
 Queue writes, receipts, results, heartbeats, and journal writes use atomic
-replacement. Queue operations and deployment operations have separate file
-locks. Durable state is authoritative; query indexes are only caches.
+replacement. Queue records, receipts, results, and journals are also synced to
+disk; the heartbeat and GPU sample files are rewritten every few seconds and
+expire quickly, so they skip fsync. Queue operations and deployment operations
+have separate file locks. Durable state is authoritative; query indexes are
+only caches.
 
 ## Storage Budget
 

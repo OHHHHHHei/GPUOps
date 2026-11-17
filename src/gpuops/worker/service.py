@@ -69,7 +69,6 @@ class Worker:
                     expected_revision=record.revision,
                     exit_code=exit_code,
                     launch_error=launch_error,
-                    details={"cancel_completed": True},
                 )
                 result.cancelled.append(record.run_id)
             except ConcurrentUpdate:
@@ -214,7 +213,6 @@ class Worker:
                     exit_code=observed_exit_code,
                     launch_error=launch_error,
                     now=utc_now(),
-                    details={"exit_code": exit_code},
                 )
             except ConcurrentUpdate:
                 continue

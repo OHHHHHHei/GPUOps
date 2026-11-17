@@ -135,7 +135,7 @@ def test_submit_is_durable_and_idempotent(tmp_path) -> None:
     assert first["result"]["job"]["run_id"] == "run-001"
     assert second["result"]["job"] == first["result"]["job"]
     assert len(rpc.queue.list()) == 1
-    assert len(rpc.queue.events()) == 1
+    assert len(rpc.queue.list()) == 1
     json.dumps(first)
 
 
@@ -199,7 +199,7 @@ def test_submit_retry_accepts_inferred_gpu_count(
 
     assert response["ok"] is True
     assert response["result"]["job"] == existing.model_dump(mode="json")
-    assert len(rpc.queue.events()) == 1
+    assert len(rpc.queue.list()) == 1
 
 
 def test_submit_requires_job_host_to_match_worker(tmp_path) -> None:
@@ -373,7 +373,7 @@ def test_show_explains_active_gpu_reservation_without_mutating_queue(tmp_path) -
         now=NOW,
     )
     waiting = rpc.queue.enqueue(exact_spec, run_id="waiting-run", now=NOW)
-    events_before = rpc.queue.events()
+    records_before = rpc.queue.list()
 
     response = rpc.handle(envelope("show", {"run_id": waiting.run_id, "explain": True}))
 
@@ -381,7 +381,7 @@ def test_show_explains_active_gpu_reservation_without_mutating_queue(tmp_path) -
     assert explanation["code"] == "gpu_occupied"
     assert explanation["details"]["occupied_gpu_indices"] == [0]
     assert rpc.queue.get(waiting.run_id) == waiting
-    assert rpc.queue.events() == events_before
+    assert rpc.queue.list() == records_before
 
 
 def test_show_ignores_expired_lease_without_mutating_queue(tmp_path) -> None:
@@ -410,7 +410,7 @@ def test_show_ignores_expired_lease_without_mutating_queue(tmp_path) -> None:
         now=NOW - timedelta(minutes=1),
     )
     waiting = rpc.queue.enqueue(exact_spec, run_id="waiting-run", now=NOW)
-    events_before = rpc.queue.events()
+    records_before = rpc.queue.list()
 
     response = rpc.handle(envelope("show", {"run_id": waiting.run_id, "explain": True}))
 
@@ -419,7 +419,7 @@ def test_show_ignores_expired_lease_without_mutating_queue(tmp_path) -> None:
     assert explanation["details"]["confirmation_required"] is True
     assert "occupied_gpu_indices" not in explanation["details"]
     assert rpc.queue.get(expired.run_id) == expired
-    assert rpc.queue.events() == events_before
+    assert rpc.queue.list() == records_before
 
 
 @pytest.mark.parametrize(
@@ -513,7 +513,7 @@ def test_show_preserves_job_and_queue_when_explanation_probe_fails(tmp_path) -> 
         run_id="waiting-run",
         now=NOW,
     )
-    events_before = rpc.queue.events()
+    records_before = rpc.queue.list()
 
     response = rpc.handle(envelope("show", {"run_id": record.run_id, "explain": True}))
 
@@ -523,7 +523,7 @@ def test_show_preserves_job_and_queue_when_explanation_probe_fails(tmp_path) -> 
     assert explanation["code"] == "unknown"
     assert explanation["details"]["error"] == "OSError: NVML unavailable with details"
     assert rpc.queue.get(record.run_id) == record
-    assert rpc.queue.events() == events_before
+    assert rpc.queue.list() == records_before
 
 
 def test_show_preserves_job_when_probe_returns_unhealthy_snapshot(tmp_path) -> None:
@@ -800,7 +800,7 @@ def test_cancel_is_durable_and_idempotent(tmp_path) -> None:
     assert first["result"]["durable"] is True
     assert first["result"]["job"]["status"] == "cancelled"
     assert second["result"]["job"] == first["result"]["job"]
-    assert len(rpc.queue.events()) == 2
+    assert rpc.queue.get("run-001").revision == first["result"]["job"]["revision"]
 
 
 def test_cancel_unknown_job_returns_defined_error(tmp_path) -> None:

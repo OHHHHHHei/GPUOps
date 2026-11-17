@@ -329,14 +329,3 @@ class JobSummary(StrictModel):
             finished_at=record.finished_at,
             expected_duration=record.spec.schedule.expected_duration,
         )
-
-
-class QueueEvent(StrictModel):
-    sequence: int = Field(ge=1)
-    timestamp: datetime = Field(default_factory=utc_now)
-    run_id: RunId
-    event_type: str
-    previous_status: JobStatus | None = None
-    status: JobStatus
-    revision: int = Field(ge=0)
-    details: dict[str, Any] = Field(default_factory=dict)

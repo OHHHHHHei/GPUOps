@@ -55,7 +55,6 @@ def test_usage_ignores_temporary_file_removed_after_enumeration(
     assert heartbeat.read_bytes() == (updated if finish_write == "replace" else b"old heartbeat")
     assert usage.total_bytes == heartbeat.stat().st_size
     assert usage.log_bytes == 0
-    assert usage.event_archive_bytes == 0
 
 
 @pytest.mark.parametrize("error", [PermissionError("permission denied"), OSError("I/O error")])
@@ -89,7 +88,6 @@ def test_storage_paths_and_prepared_logs_are_private(tmp_path) -> None:
 
     assert stat.S_IMODE(tmp_path.stat().st_mode) == 0o700
     assert stat.S_IMODE(storage.logs_directory.stat().st_mode) == 0o700
-    assert stat.S_IMODE(storage.event_archive_directory.stat().st_mode) == 0o700
     assert stat.S_IMODE(log.parent.stat().st_mode) == 0o700
     assert stat.S_IMODE(log.parent.parent.stat().st_mode) == 0o700
     assert stat.S_IMODE(log.stat().st_mode) == 0o600
@@ -124,7 +122,7 @@ def test_log_budget_cleanup_removes_oldest_first(tmp_path) -> None:
     assert newest.exists()
 
 
-def test_global_high_water_cleanup_includes_event_archives(tmp_path) -> None:
+def test_global_high_water_cleanup_removes_logs_but_keeps_state(tmp_path) -> None:
     storage = StorageBudget(
         tmp_path,
         total_budget_bytes=200,
@@ -133,17 +131,17 @@ def test_global_high_water_cleanup_includes_event_archives(tmp_path) -> None:
         target_watermark=0.5,
     )
     state = tmp_path / "jobs" / "must-stay.json"
-    archive = storage.event_archive_directory / "events-1.jsonl.gz"
+    old_log = storage.logs_directory / "old.log"
     log = storage.logs_directory / "worker.log"
     write_bytes(state, 70, mtime=0)
-    write_bytes(archive, 50, mtime=1)
+    write_bytes(old_log, 50, mtime=1)
     write_bytes(log, 50, mtime=2)
 
     report = storage.cleanup_high_watermark()
 
     assert state.exists()
     assert report.after.total_bytes <= 100
-    assert "event-archive/events-1.jsonl.gz" in report.removed_paths
+    assert "logs/old.log" in report.removed_paths
 
 
 def test_cleanup_ignores_symlinks_and_external_experiment_outputs(tmp_path) -> None:

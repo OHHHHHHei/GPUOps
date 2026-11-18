@@ -102,23 +102,24 @@ def write_supervisor_artifacts(
     )
 
 
-def test_shared_launch_copies_only_the_child_group_leader_credentials(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("child", "expected_identity"),
+    [
+        (ProcessIdentity(pid=123, pgid=123, start_ticks=25, boot_id="boot-A"), (123, 25, "boot-A")),
+        (ProcessIdentity(pid=123, pgid=120, start_ticks=25, boot_id="boot-A"), (123, None, None)),
+        (None, (100, None, None)),
+    ],
+    ids=["child-leader", "child-member", "supervisor-only"],
+)
+def test_launch_records_only_child_group_leader_credentials(tmp_path, child, expected_identity):
     paths = SupervisorPaths.create(tmp_path, "identity-test")
     supervisor = ProcessIdentity(pid=100, pgid=100, start_ticks=20, boot_id="boot-A")
-    child = ProcessIdentity(pid=123, pgid=123, start_ticks=25, boot_id="boot-A")
     write_supervisor_artifacts(paths, supervisor=supervisor, child=child)
-    receipt = DurableJobSupervisor(tmp_path).reconcile("identity-test")
-    assert receipt is not None
-
-    launch = DurableSupervisorLauncher._launch_info(receipt, shared=True)
-    assert (launch.external_id, launch.pid, launch.start_ticks, launch.boot_id) == (
-        "launch-token",
-        123,
-        25,
-        "boot-A",
-    )
-    exclusive = DurableSupervisorLauncher._launch_info(receipt, shared=False)
-    assert set(exclusive.model_dump()) == {"pid", "started_at", "external_id"}
+    launcher = DurableSupervisorLauncher(DurableJobSupervisor(tmp_path))
+    launch = launcher.reconcile(SimpleNamespace(run_id="identity-test"))
+    stored = launch.model_dump(mode="json")
+    assert stored["external_id"] == "launch-token"
+    assert (stored["pid"], stored["start_ticks"], stored["boot_id"]) == expected_identity
 
 
 def test_launch_writes_receipt_result_and_merged_console(tmp_path: Path) -> None:

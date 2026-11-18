@@ -83,8 +83,6 @@ def _capacity_rows(
         str(available) if available is not None else "?",
         gpu.get("sampled_at") or "?",
     )
-    if not jobs:
-        return [(*common, "-", "-", "-")]
     return [
         (
             *(common if position == 0 else ("",) * len(common)),

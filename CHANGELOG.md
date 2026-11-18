@@ -9,8 +9,10 @@ for tested behavior and limits.
   reserves each job's per-card `memory_mib`, accounts for external usage, and
   defaults to two managed jobs per GPU. Status, queue, and job queries show
   the allocations and per-job requests.
-- Upgrade the controller and Workers together. Older versions cannot read job
-  records containing `exclusive: false`, including records for finished jobs.
+- Upgrade the controller and Workers together. Version 0.5 reads existing 0.4
+  records. Version 0.4 rejects records containing `exclusive: false` or the
+  new launch fields `start_ticks` and `boot_id`. An exclusive job started on
+  0.5 can therefore block rollback to 0.4 even after the job finishes.
 
 ## 0.4.0 — Unreleased
 

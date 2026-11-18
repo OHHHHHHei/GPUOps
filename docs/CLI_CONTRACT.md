@@ -277,6 +277,8 @@ available budget. Exclusive and shared jobs cannot occupy the same GPU.
   `max_jobs_per_gpu`, and `available_memory_mib` (nullable when sample evidence
   is insufficient). Each job has a `run_id`, `exclusive`, and per-card
   `memory_mib`. The card's existing `memory.used` remains physical usage.
+  Plain `status` shows telemetry for all GPUs. Its allocation table lists only
+  cards holding GPUOps jobs and appears when at least one card has a job.
 - `queue --json` includes `exclusive`, `memory_mib`, `requested_gpus` (null for
   automatic selection), `allocated_gpus` (empty while queued), and
   `gpu_uuids` mapping allocated indices to physical UUIDs. Multiple rows may

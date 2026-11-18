@@ -541,13 +541,13 @@ class DurableSupervisorLauncher:
             cwd=job.spec.working_directory,
             environment=environment,
         )
-        return self._launch_info(receipt, shared=not job.spec.resources.exclusive)
+        return self._launch_info(receipt)
 
     def reconcile(self, job: Any) -> Any | None:
         receipt = self.supervisor.reconcile(job.run_id)
         if receipt is None:
             return None
-        return self._launch_info(receipt, shared=not job.spec.resources.exclusive)
+        return self._launch_info(receipt)
 
     def poll(self, job: Any) -> int | None:
         result, receipt = self._result_and_receipt(job)
@@ -605,12 +605,12 @@ class DurableSupervisorLauncher:
         )
 
     @staticmethod
-    def _launch_info(receipt: SupervisorReceipt, *, shared: bool) -> Any:
+    def _launch_info(receipt: SupervisorReceipt) -> Any:
         from gpuops.models import LaunchInfo
 
         process = receipt.child or receipt.supervisor
         started_at = receipt.child_started_at or receipt.accepted_at
-        leader = receipt.child if shared and process.pid == process.pgid else None
+        leader = receipt.child if process.pid == process.pgid else None
         return LaunchInfo(
             pid=process.pid,
             started_at=datetime.fromisoformat(started_at),

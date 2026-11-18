@@ -136,6 +136,8 @@ def read_cache():
         raise CacheError("telemetry_unavailable", "Worker telemetry timestamps do not match", snapshot["sampled_at"])
     for gpu in data["gpus"]:
         annotate_stale_gpu(gpu, now)
+        if gpu.get("error_code") == "telemetry_stale" and isinstance(gpu.get("capacity"), dict):
+            gpu["capacity"]["available_memory_mib"] = None
     return document, snapshot, data
 """
 

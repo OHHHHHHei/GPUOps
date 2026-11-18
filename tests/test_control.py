@@ -22,7 +22,8 @@ from gpuops.control import (
     generate_run_id,
 )
 from gpuops.core.resources import GpuResource, ServerResourceSnapshot
-from gpuops.models import JobRecord, JobSpec
+from gpuops.models import Allocation, JobRecord, JobSpec, JobStatus, LaunchInfo
+from gpuops.transport import _resource_snapshot
 
 NOW = datetime(2026, 9, 19, 10, 0, tzinfo=timezone.utc)
 TARGET_01 = RemoteTarget("gpu01", "lab-gpu01")
@@ -233,6 +234,69 @@ def test_auto_uses_live_gpu_and_queue_state_deterministically(tmp_path: Path) ->
     assert journal is not None
     assert journal.state == JournalState.ACCEPTED
     assert journal.frozen_spec.resources.host == "gpu02"
+
+
+def test_auto_routes_shared_job_using_server_limit_and_attributed_memory(tmp_path):
+    spec = manifest()
+    spec = spec.model_copy(
+        update={
+            "resources": spec.resources.model_copy(
+                update={"exclusive": False, "memory_mib": 11500}
+            ),
+        }
+    )
+    states = {}
+    for host, limit in [("gpu01", 1), ("gpu02", 2)]:
+        raw = {
+            "collected_at": NOW.isoformat(),
+            "max_jobs_per_gpu": limit,
+            "gpus": [
+                {
+                    "index": 0,
+                    "uuid": "GPU-0",
+                    "memory.total": 24576,
+                    "memory.used": 10496,
+                    "utilization.gpu": 45,
+                    "processes": [{"pid": 123}],
+                    "group_memory": [
+                        {
+                            "pgid": 123,
+                            "leader_start_ticks": 100,
+                            "boot_id": "boot",
+                            "memory_mib": 10240,
+                        }
+                    ],
+                }
+            ],
+        }
+        running = JobRecord(
+            run_id="active",
+            spec=spec,
+            status=JobStatus.RUNNING,
+            created_at=NOW,
+            updated_at=NOW,
+            allocation=Allocation(
+                server_id=host,
+                worker_id="worker",
+                gpu_indices=[0],
+                gpu_uuids={0: "GPU-0"},
+                leased_at=NOW,
+                lease_expires_at=NOW + timedelta(seconds=30),
+                lease_token="lease",
+            ),
+            launch=LaunchInfo(
+                pid=123,
+                started_at=NOW,
+                external_id="launch",
+                start_ticks=100,
+                boot_id="boot",
+            ),
+        )
+        states[host] = RemoteHostState(_resource_snapshot(host, raw), (running,))
+
+    result = asyncio.run(client(tmp_path, FakeTransport(states)).submit(spec, run_id="second"))
+
+    assert result.target == TARGET_02
 
 
 def test_auto_tie_breaks_by_server_id_and_ignores_offline_host(tmp_path: Path) -> None:

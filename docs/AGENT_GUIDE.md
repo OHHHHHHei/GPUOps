@@ -129,7 +129,12 @@ experiment and have the code, environment, data, and checkpoints ready. On an
 installed server, `auto` considers only that server by default. The chosen destination is frozen at submission;
 reconciliation does not move the job to another server.
 
-`memory_mib` means required free memory **per GPU**, not a runtime memory cap.
+Jobs use an idle GPU exclusively by default. To share one, set
+`"exclusive": false` in `resources` and request a positive `memory_mib` per GPU
+(for example, 11,500 MiB for each of two inference jobs). An exclusive request
+specifies the free memory needed to start. A shared request reserves that memory
+from lease until release, including model loading and cancellation in progress.
+Use the expected per-card peak. The application can use more at runtime.
 `expected_duration` is optional and supplies ETA evidence, not a time limit.
 Commands are argument arrays; `working_directory` is an absolute remote path.
 Set `runtime.conda_environment` or `runtime.environment` only when the experiment
@@ -173,8 +178,9 @@ new one. `reconcile` without a run ID explicitly retries **all** pending entries
 | --- | --- |
 | `not_before` | Wait until `details.available_at`. |
 | `deadline` | The current schedule cannot meet the deadline; review the request. |
-| `gpu_occupied` | Requested capacity is in use or reserved; wait. |
-| `insufficient_free_memory` | Idle GPUs lack the requested free memory; review the request or wait. |
+| `gpu_occupied` | An exclusive request needs an idle GPU free of managed jobs, or a shared request is blocked by an existing exclusive job. |
+| `insufficient_free_memory` | The per-card budget is below the request. For sharing it includes outstanding reservations. Inspect `details.blocked_gpus` or wait. |
+| `gpu_job_limit_reached` | Shared slots are full. Each blocked GPU lists its managed jobs and the effective `max_jobs_per_gpu`. |
 | `worker_unavailable` | Inspect/repair the Worker with `fleet status` / `fleet start`. |
 | `failed` | Inspect the recorded failure reason and managed logs before another run. |
 | `unknown` | Evidence is incomplete, mixed, stale, or unsupported by the installed Worker. |
@@ -226,6 +232,8 @@ client versions and the adapter protocol.
 ## Account and Ownership Scope
 
 One Worker and its queue coordinate jobs under one trusted Unix account on a
-server. Other users' visible compute processes make a GPU unavailable; GPUOps
-leases coordinate only jobs submitted through its queue. Cancellation controls
+server. An external compute process blocks exclusive work. A shared job can run
+alongside it when the remaining budget covers the request. External processes
+count at observed usage and occupy no GPUOps slot. GPUOps-managed shared jobs
+reserve at least their requested memory even while loading. Cancellation controls
 only verified GPUOps-managed processes.

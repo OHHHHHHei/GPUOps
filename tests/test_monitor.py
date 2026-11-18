@@ -11,7 +11,7 @@ import pytest
 
 from gpuops.config import MONITOR_TIMEOUT_SECONDS
 from gpuops.gpu_policy import GPU_QUERY_TIMEOUT_SECONDS
-from gpuops.monitor import MonitorService, RemoteCollector, ServerTarget
+from gpuops.monitor import MonitorService, RemoteCollector, ServerResult, ServerTarget
 from gpuops.monitor.formatting import format_status_table
 from gpuops.monitor.remote import COLLECTOR_SCRIPT, DOCTOR_SCRIPT
 from gpuops.ssh import SSHResult, SSHTimeoutError
@@ -125,6 +125,23 @@ def test_status_table_includes_process_details_and_offline_host():
     assert "1h02m" in table
     assert "GPU 02" in table
     assert "offline" in table
+
+
+def test_status_allocation_table_only_lists_cards_with_managed_jobs():
+    capacity = {"jobs": [], "max_jobs_per_gpu": 2, "available_memory_mib": 16000}
+    gpus = [{"index": 0, "capacity": capacity, "processes": [{"username": "other-user"}]}]
+    result = ServerResult(ServerTarget("gpu01", "GPU 01", "gpu01"), True, data={"gpus": gpus})
+
+    table = format_status_table([result])
+    assert "other-user" in table
+    assert "JOBS/LIMIT" not in table
+
+    job = {"run_id": "infer", "exclusive": False, "memory_mib": 11500}
+    gpus.append({"index": 1, "capacity": {**capacity, "jobs": [job]}})
+    telemetry, allocations = format_status_table([result]).split("\n\n")
+    assert "other-user" in telemetry
+    assert "infer" in allocations and "1/2" in allocations and "0/2" not in allocations
+    assert result.as_dict()["data"]["gpus"][0]["capacity"] == capacity
 
 
 def test_doctor_reports_worker_cache_health():

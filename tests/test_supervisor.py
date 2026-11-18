@@ -102,6 +102,26 @@ def write_supervisor_artifacts(
     )
 
 
+@pytest.mark.parametrize(
+    ("child", "expected_identity"),
+    [
+        (ProcessIdentity(pid=123, pgid=123, start_ticks=25, boot_id="boot-A"), (123, 25, "boot-A")),
+        (ProcessIdentity(pid=123, pgid=120, start_ticks=25, boot_id="boot-A"), (123, None, None)),
+        (None, (100, None, None)),
+    ],
+    ids=["child-leader", "child-member", "supervisor-only"],
+)
+def test_launch_records_only_child_group_leader_credentials(tmp_path, child, expected_identity):
+    paths = SupervisorPaths.create(tmp_path, "identity-test")
+    supervisor = ProcessIdentity(pid=100, pgid=100, start_ticks=20, boot_id="boot-A")
+    write_supervisor_artifacts(paths, supervisor=supervisor, child=child)
+    launcher = DurableSupervisorLauncher(DurableJobSupervisor(tmp_path))
+    launch = launcher.reconcile(SimpleNamespace(run_id="identity-test"))
+    stored = launch.model_dump(mode="json")
+    assert stored["external_id"] == "launch-token"
+    assert (stored["pid"], stored["start_ticks"], stored["boot_id"]) == expected_identity
+
+
 def test_launch_writes_receipt_result_and_merged_console(tmp_path: Path) -> None:
     supervisor = DurableJobSupervisor(tmp_path)
     receipt = supervisor.launch(

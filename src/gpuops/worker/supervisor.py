@@ -610,10 +610,13 @@ class DurableSupervisorLauncher:
 
         process = receipt.child or receipt.supervisor
         started_at = receipt.child_started_at or receipt.accepted_at
+        leader = receipt.child if process.pid == process.pgid else None
         return LaunchInfo(
             pid=process.pid,
             started_at=datetime.fromisoformat(started_at),
             external_id=receipt.launch_token,
+            start_ticks=leader.start_ticks if leader else None,
+            boot_id=leader.boot_id if leader else None,
         )
 
 

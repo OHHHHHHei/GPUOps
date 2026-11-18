@@ -298,9 +298,15 @@ The default idle-memory limit is 384 MiB plus 256 MiB tolerance. A process-free
 GPU above that limit is treated as residual/non-idle. The scheduler reads two
 distinct observations of each selected card, 2–45 seconds apart, with the latest
 no more than 15 seconds old. Updating another card never refreshes that evidence.
-The scheduler also requires the requested amount of
-free memory. A manifest that omits `memory_mib` requests at least 1 GiB free per
-GPU; production manifests should state the real requirement.
+Exclusive jobs require idle GPUs and the requested free memory on each.
+Shared jobs (`resources.exclusive: false`) reserve the requested `memory_mib`
+per GPU and may coexist with external processes within the measured budget.
+Both modes default to 1 GiB per GPU. Jobs should declare the expected peak.
+
+To configure the managed job limit on a server, write
+`{"max_jobs_per_gpu": 2}` to the Worker account's
+`~/.config/gpuops/scheduler.json`. The default is 2. The Worker reads this
+setting on startup. Lowering it affects subsequent admissions.
 
 After leasing, the worker writes a durable launch intent and starts a detached
 per-job supervisor. The supervisor holds a run-specific lock, launches the argv

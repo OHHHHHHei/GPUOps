@@ -10,12 +10,12 @@ GPUOps 负责运行已经准备好的实验命令。实验代码、运行环境�
 
 ## 安装
 
-0.4.0 发布前请使用下方的源码安装方式；下载链接用于正式发布后。
+0.5.0 发布前请使用下方的源码安装方式；下载链接用于正式发布后。
 
-控制端需要 Python 3.10+ 和 OpenSSH（`ssh`、`scp`）。使用 [uv](https://docs.astral.sh/uv/getting-started/installation/) 安装 [v0.4.0](https://github.com/OHHHHHHei/GPUOps/releases/tag/v0.4.0)，包含可选的 Web 控制台：
+控制端需要 Python 3.10+ 和 OpenSSH（`ssh`、`scp`）。使用 [uv](https://docs.astral.sh/uv/getting-started/installation/) 安装 [v0.5.0](https://github.com/OHHHHHHei/GPUOps/releases/tag/v0.5.0)，包含可选的 Web 控制台：
 
 ```bash
-uv tool install 'gpuops[web] @ https://github.com/OHHHHHHei/GPUOps/releases/download/v0.4.0/gpuops-0.4.0-py3-none-any.whl'
+uv tool install 'gpuops[web] @ https://github.com/OHHHHHHei/GPUOps/releases/download/v0.5.0/gpuops-0.5.0-py3-none-any.whl'
 gpuops version --json
 ```
 
@@ -25,7 +25,7 @@ gpuops version --json
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install './gpuops-0.4.0-py3-none-any.whl[web]'
+.venv/bin/python -m pip install './gpuops-0.5.0-py3-none-any.whl[web]'
 .venv/bin/gpuops version --json
 ```
 
@@ -101,7 +101,7 @@ gpuops history --json
 
 保存返回的 `run_id`，并确认 `submission_state` 为 `"accepted"`。后续命令中的 `RUN_ID` 都替换为这个值。提交时会自动验证任务清单；若只想检查而不提交，可以运行 `gpuops validate job.json --json`。
 
-日常使用时省略 `resources.gpus`，Worker 会按指定服务器和 GPU 数量自动选择符合条件的物理显卡。只有明确需要固定卡号时，才设置 `gpus`。`memory_mib` 表示每张卡所需的空闲显存，不会限制实验运行时的实际显存使用量。
+日常使用时省略 `resources.gpus`，Worker 会按指定服务器和 GPU 数量自动选择符合条件的物理显卡。只有明确需要固定卡号时，才设置 `gpus`。作业默认独占，`memory_mib` 表示每卡启动所需的空闲显存。设置 `exclusive: false` 可申请共享，每卡的 `memory_mib` 须为正数，从取得租约起预留到释放。默认每卡最多两个受管作业，运行时显存用量由作业决定。
 
 `host: "auto"` 还会自动选择服务器。使用前，应确认所有候选服务器都在允许使用的范围内，并已准备好实验所需的代码、环境和数据。服务器选择在提交前确定，恢复提交时会沿用同一目标。
 
@@ -187,9 +187,9 @@ Worker 提醒和聊天跟进共用一个 macOS 后台检查器。任一功能有
 
 ## 运行边界与维护
 
-GPUOps 在每台服务器的同一个可信 Unix 账户内协调任务。Worker 会避开可见的外部 GPU 进程，包括其他用户的任务；资源租约只协调该账户下的 GPUOps 作业，无法阻止其他用户或绕过 GPUOps 的程序占用显卡。取消操作只会向身份确认过的受管进程发送信号。
+GPUOps 在每台服务器的同一个可信 Unix 账户内协调任务。其他用户的 GPU 进程会阻止独占作业使用该卡。共享作业按外部进程的实占显存计算剩余预算，满足申请时可以同卡运行。资源租约只协调该账户下的 GPUOps 作业，无法阻止其他用户或绕过 GPUOps 的程序占用显卡。取消操作只会向身份确认过的受管进程发送信号。
 
-分配前会通过两次采样确认 GPU 空闲，并按设备 UUID 启动实验。故障设备会自动重试检测，恢复后重新参与分配。GPU 状态统一来自 Worker 的共享采样，重复查询不会额外启动探测。
+分配前会通过两次采样确认每张 GPU 满足申请，并按设备 UUID 启动实验。故障设备会自动重试检测，恢复后重新参与分配。GPU 状态统一来自 Worker 的共享采样，重复查询不会额外启动探测。
 
 Worker 不需要 Docker、`sudo`、systemd 或服务器端 HTTP 服务。服务器重启后需要运行 `gpuops fleet start --json`；停止 Worker 时，已启动的实验会继续运行。每台服务器上，GPUOps 自有的安装文件、缓存、持久化状态和日志合计不超过 1 GiB；实验输出和数据集不计入其中。
 

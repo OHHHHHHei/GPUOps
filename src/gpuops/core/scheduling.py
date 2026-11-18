@@ -1,42 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 
-from gpuops.core.resources import GpuResource, ServerResourceSnapshot
-from gpuops.models import JobRecord, JobStatus, ResourceRequest
-
-ALLOCATED_STATUSES = frozenset(
-    {JobStatus.LEASED, JobStatus.STARTING, JobStatus.RUNNING, JobStatus.CANCEL_REQUESTED}
-)
-
-
-def reserved_gpu_indices(
-    records: Iterable[JobRecord],
-    gpus: Iterable[GpuResource],
-    *,
-    server_id: str,
-    now: datetime,
-) -> set[int]:
-    """Return GPU indices held on this server, following UUIDs across renumbering."""
-
-    reserved: set[int] = set()
-    uuids: set[str] = set()
-    for record in records:
-        allocation = record.allocation
-        if (
-            allocation is None
-            or allocation.server_id != server_id
-            or record.status not in ALLOCATED_STATUSES
-            or (record.status == JobStatus.LEASED and allocation.lease_expires_at <= now)
-        ):
-            continue
-        reserved.update(allocation.gpu_indices)
-        uuids.update(allocation.gpu_uuids.values())
-    reserved.update(gpu.index for gpu in gpus if gpu.uuid in uuids)
-    return reserved
+from gpuops.core.capacity import gpu_capacity
+from gpuops.core.resources import ServerResourceSnapshot
+from gpuops.models import JobRecord, ResourceRequest
 
 
 class ScheduleBlocker(str, Enum):
@@ -59,43 +30,14 @@ class ScheduleWindowAssessment:
 class GpuWaitBlocker(str, Enum):
     OCCUPIED = "gpu_occupied"
     INSUFFICIENT_MEMORY = "insufficient_free_memory"
+    JOB_LIMIT = "gpu_job_limit_reached"
     UNKNOWN = "unknown"
 
 
 @dataclass(frozen=True, slots=True)
 class GpuWaitAssessment:
     blocker: GpuWaitBlocker | None
-    allocatable_indices: tuple[int, ...]
-    occupied_indices: tuple[int, ...]
-    insufficient_memory_indices: tuple[int, ...]
-    unknown_indices: tuple[int, ...]
-    missing_indices: tuple[int, ...]
-
-    def details(self, request: ResourceRequest) -> dict[str, object]:
-        details: dict[str, object] = {
-            "required_gpu_count": request.gpu_count,
-            "requested_memory_mib": request.memory_mib,
-            "allocatable_gpu_count": len(self.allocatable_indices),
-            "allocatable_gpu_indices": list(self.allocatable_indices),
-        }
-        if request.gpus is not None:
-            details["requested_gpu_indices"] = request.gpus
-        if self.occupied_indices:
-            details["occupied_gpu_indices"] = list(self.occupied_indices)
-        if self.insufficient_memory_indices:
-            details["insufficient_memory_gpu_indices"] = list(self.insufficient_memory_indices)
-        if self.unknown_indices:
-            details["unknown_gpu_indices"] = list(self.unknown_indices)
-        if self.missing_indices:
-            details["missing_gpu_indices"] = list(self.missing_indices)
-        blockers: list[str] = []
-        if self.occupied_indices:
-            blockers.append(GpuWaitBlocker.OCCUPIED.value)
-        if self.insufficient_memory_indices:
-            blockers.append(GpuWaitBlocker.INSUFFICIENT_MEMORY.value)
-        if blockers:
-            details["observed_blockers"] = blockers
-        return details
+    details: dict[str, object]
 
 
 def assess_schedule_window(
@@ -129,70 +71,64 @@ def assess_schedule_window(
 def assess_gpu_wait(
     request: ResourceRequest,
     snapshot: ServerResourceSnapshot,
+    active: Sequence[JobRecord],
     *,
-    reserved_indices: set[int],
+    now: datetime,
 ) -> GpuWaitAssessment:
     by_index = snapshot.by_index()
-    requested_indices = request.gpus
-    missing = (
-        sorted(set(requested_indices).difference(by_index)) if requested_indices is not None else []
-    )
-    relevant = (
-        [by_index[index] for index in requested_indices if index in by_index]
-        if requested_indices is not None
-        else list(snapshot.gpus)
-    )
-
-    allocatable: list[int] = []
-    occupied: list[int] = []
-    insufficient_memory: list[int] = []
-    unknown: list[int] = []
-    for gpu in relevant:
-        if gpu.index in reserved_indices:
-            occupied.append(gpu.index)
-        elif not _has_complete_scheduling_evidence(gpu):
-            unknown.append(gpu.index)
-        elif gpu.can_allocate(request.memory_mib):
-            allocatable.append(gpu.index)
-        elif not gpu.idle or gpu.process_count != 0:
-            occupied.append(gpu.index)
-        elif gpu.memory_free_mib is not None and gpu.memory_free_mib < request.memory_mib:
-            insufficient_memory.append(gpu.index)
-        else:
-            unknown.append(gpu.index)
-
-    required = request.gpu_count
-    if not missing and len(allocatable) >= required:
-        blocker = None
-    elif missing or unknown or len(relevant) < required:
-        blocker = GpuWaitBlocker.UNKNOWN
-    else:
-        if occupied and insufficient_memory:
-            blocker = GpuWaitBlocker.UNKNOWN
-        elif occupied:
-            blocker = GpuWaitBlocker.OCCUPIED
-        elif insufficient_memory:
-            blocker = GpuWaitBlocker.INSUFFICIENT_MEMORY
-        else:
-            blocker = GpuWaitBlocker.UNKNOWN
-
-    return GpuWaitAssessment(
-        blocker=blocker,
-        allocatable_indices=tuple(sorted(allocatable)),
-        occupied_indices=tuple(sorted(occupied)),
-        insufficient_memory_indices=tuple(sorted(insufficient_memory)),
-        unknown_indices=tuple(sorted(unknown)),
-        missing_indices=tuple(missing),
-    )
-
-
-def _has_complete_scheduling_evidence(gpu: GpuResource) -> bool:
-    return not gpu.error and all(
-        value is not None
-        for value in (
-            gpu.memory_total_mib,
-            gpu.memory_used_mib,
-            gpu.utilization_percent,
-            gpu.process_count,
+    requested = sorted(by_index) if request.gpus is None else request.gpus
+    available: list[int] = []
+    missing: list[int] = []
+    blocked: dict[GpuWaitBlocker, list[int]] = {}
+    cards: list[dict[str, object]] = []
+    for index in requested:
+        gpu = by_index.get(index)
+        if gpu is None:
+            missing.append(index)
+            continue
+        capacity = gpu_capacity(
+            gpu,
+            active,
+            server_id=snapshot.server_id,
+            now=now,
+            max_jobs_per_gpu=snapshot.max_jobs_per_gpu,
         )
-    )
+        reason = capacity.blocker(request)
+        if reason is None:
+            available.append(index)
+            continue
+        blocked.setdefault(GpuWaitBlocker(reason), []).append(index)
+        cards.append({"gpu_index": index, "reason": reason, **capacity.model_dump(mode="json")})
+
+    blocker: GpuWaitBlocker | None = GpuWaitBlocker.UNKNOWN
+    if not missing and len(available) >= request.gpu_count:
+        blocker = None
+    elif not missing and len(requested) >= request.gpu_count and len(blocked) == 1:
+        blocker = next(iter(blocked))
+
+    details: dict[str, object] = {
+        "required_gpu_count": request.gpu_count,
+        "requested_memory_mib": request.memory_mib,
+        "requested_exclusive": request.exclusive,
+        "allocatable_gpu_count": len(available),
+        "allocatable_gpu_indices": available,
+    }
+    if request.gpus is not None:
+        details["requested_gpu_indices"] = requested
+    if missing:
+        details["missing_gpu_indices"] = missing
+    keys = {
+        GpuWaitBlocker.OCCUPIED: "occupied_gpu_indices",
+        GpuWaitBlocker.INSUFFICIENT_MEMORY: "insufficient_memory_gpu_indices",
+        GpuWaitBlocker.JOB_LIMIT: "job_limit_gpu_indices",
+        GpuWaitBlocker.UNKNOWN: "unknown_gpu_indices",
+    }
+    for reason_code, key in keys.items():
+        if reason_code in blocked:
+            details[key] = blocked[reason_code]
+    observed = [code.value for code in keys if code in blocked and code != GpuWaitBlocker.UNKNOWN]
+    if observed:
+        details["observed_blockers"] = observed
+    if cards:
+        details["blocked_gpus"] = cards
+    return GpuWaitAssessment(blocker, details)

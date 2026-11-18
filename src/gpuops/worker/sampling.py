@@ -17,8 +17,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from gpuops.config import DEFAULT_MAX_JOBS_PER_GPU
+from gpuops.core.capacity import gpu_capacity
 from gpuops.core.resources import GpuResource, ServerResourceSnapshot
-from gpuops.models import utc_now
+from gpuops.models import JobRecord, utc_now
 from gpuops.worker.devices import GpuDevice, discover_devices
 from gpuops.worker.runtime import atomic_write_json
 
@@ -108,6 +110,8 @@ class AsyncGpuSampler:
         clock: Callable[[], datetime] = utc_now,
         device_discovery: Callable[[], list[GpuDevice]] = discover_devices,
         gpu_unavailable: Callable[[str], str | None] | None = None,
+        active_jobs: Callable[[], list[JobRecord]] = list,
+        max_jobs_per_gpu: int = DEFAULT_MAX_JOBS_PER_GPU,
     ) -> None:
         if not server_id.strip():
             raise ValueError("server_id cannot be empty")
@@ -119,6 +123,8 @@ class AsyncGpuSampler:
         self.device_discovery = device_discovery
         # Reports a CUDA failure found when the scheduler last tried this GPU.
         self.gpu_unavailable = gpu_unavailable
+        self.active_jobs = active_jobs
+        self.max_jobs_per_gpu = max_jobs_per_gpu
         self._devices: dict[str, _DeviceState] = {}
         self._retired_processes: list[subprocess.Popen[bytes]] = []
         self._next_discovery_at = 0.0
@@ -442,8 +448,25 @@ class AsyncGpuSampler:
                 }
             )
         snapshot = ServerResourceSnapshot(
-            server_id=self.server_id, sampled_at=now, healthy=True, error=None, gpus=gpus
+            server_id=self.server_id,
+            sampled_at=now,
+            gpus=gpus,
+            max_jobs_per_gpu=self.max_jobs_per_gpu,
         )
+        # Queue state can change between samples. Project it once per publication,
+        # using only active records and each card's own sample age.
+        active = self.active_jobs()
+        fresh = snapshot.with_fresh_gpus(now, FRESH_MAX_AGE_SECONDS)
+        for raw_gpu, gpu in zip(raw_gpus, fresh.gpus, strict=True):
+            raw_gpu["idle"] = gpu.idle
+            raw_gpu["group_memory"] = [group.model_dump() for group in gpu.group_memory]
+            raw_gpu["capacity"] = gpu_capacity(
+                gpu,
+                active,
+                server_id=self.server_id,
+                now=now,
+                max_jobs_per_gpu=self.max_jobs_per_gpu,
+            ).model_dump(mode="json")
         old = self._read_cache()
         previous = None
         if old is not None:
@@ -479,7 +502,11 @@ class AsyncGpuSampler:
             {
                 "snapshot": snapshot.model_dump(mode="json"),
                 "previous": previous,
-                "data": {"gpus": raw_gpus, "collected_at": now.isoformat()},
+                "data": {
+                    "gpus": raw_gpus,
+                    "collected_at": now.isoformat(),
+                    "max_jobs_per_gpu": self.max_jobs_per_gpu,
+                },
                 "error_code": None,
             },
             # Rewritten every tick and stale after 15 seconds; a crash loses nothing.

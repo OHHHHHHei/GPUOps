@@ -6,6 +6,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
+from gpuops.core.capacity import ALLOCATED_STATUSES, GpuJob, records_on_gpu
 from gpuops.core.queue import QueueStore
 from gpuops.core.resources import ResourceProbe
 from gpuops.core.scheduling import (
@@ -13,7 +14,6 @@ from gpuops.core.scheduling import (
     ScheduleBlocker,
     assess_gpu_wait,
     assess_schedule_window,
-    reserved_gpu_indices,
 )
 from gpuops.models import JobRecord, JobStatus
 
@@ -32,7 +32,7 @@ def explain_job(
 
     now = clock()
     if record.status != JobStatus.QUEUED:
-        return _explain_nonqueued(record, now)
+        return _explain_nonqueued(record, now, queue)
 
     window = assess_schedule_window(record, server_id=server_id, now=now)
     if window.blocker == ScheduleBlocker.NOT_BEFORE:
@@ -99,23 +99,16 @@ def explain_job(
         return _unknown_explanation(snapshot_now, snapshot_error)
 
     try:
-        active = queue.list(
-            {
-                JobStatus.LEASED,
-                JobStatus.STARTING,
-                JobStatus.RUNNING,
-                JobStatus.CANCEL_REQUESTED,
-            }
-        )
+        active = queue.list(set(ALLOCATED_STATUSES))
     except Exception as error:
         return _unknown_explanation(snapshot_now, error)
-    reserved = reserved_gpu_indices(active, snapshot.gpus, server_id=server_id, now=snapshot_now)
     assessment = assess_gpu_wait(
         record.spec.resources,
-        snapshot,
-        reserved_indices=reserved,
+        snapshot.with_fresh_gpus(snapshot_now, max_snapshot_age_seconds),
+        active,
+        now=snapshot_now,
     )
-    details = assessment.details(record.spec.resources)
+    details = assessment.details
     if assessment.blocker is None:
         details["confirmation_required"] = True
         return _explanation(
@@ -130,11 +123,18 @@ def explain_job(
             next_action="wait",
         )
     if assessment.blocker == GpuWaitBlocker.OCCUPIED:
-        message = "The requested GPU capacity is currently occupied."
+        message = (
+            "An exclusive job requires an idle GPU with no managed allocations."
+            if record.spec.resources.exclusive
+            else "An exclusive allocation holds the requested GPU capacity."
+        )
         next_action = "wait"
     elif assessment.blocker == GpuWaitBlocker.INSUFFICIENT_MEMORY:
-        message = "Idle GPUs do not have enough free memory for this job."
+        message = "The available per-GPU memory budget is below the requested amount."
         next_action = "adjust_resources"
+    elif assessment.blocker == GpuWaitBlocker.JOB_LIMIT:
+        message = "The shared GPUs have reached their managed job limit."
+        next_action = "wait"
     else:
         message = "The current GPU evidence does not identify one definite wait reason."
         next_action = "inspect_gpu_status"
@@ -148,7 +148,7 @@ def explain_job(
     )
 
 
-def _explain_nonqueued(record: JobRecord, now: datetime) -> dict[str, Any]:
+def _explain_nonqueued(record: JobRecord, now: datetime, queue: QueueStore) -> dict[str, Any]:
     status = record.status
     waiting = status in {JobStatus.LEASED, JobStatus.STARTING}
     details: dict[str, Any] = {"status": status.value}
@@ -178,6 +178,27 @@ def _explain_nonqueued(record: JobRecord, now: datetime) -> dict[str, Any]:
     else:
         message = "The job was cancelled."
         next_action = "inspect_logs"
+    allocation = record.allocation
+    if status in ALLOCATED_STATUSES and allocation is not None:
+        try:
+            active = queue.list(set(ALLOCATED_STATUSES))
+        except Exception as error:
+            details["gpu_peers_error"] = _error_text(error)
+        else:
+            cards = []
+            for index in allocation.gpu_indices:
+                uuid = allocation.gpu_uuids.get(index)
+                peers = records_on_gpu(index, uuid, active, server_id=allocation.server_id, now=now)
+                cards.append(
+                    {
+                        "allocated_index": index,
+                        "uuid": uuid,
+                        "jobs": [
+                            GpuJob.from_record(peer).model_dump(mode="json") for peer in peers
+                        ],
+                    }
+                )
+            details["gpus"] = cards
     return _explanation(
         waiting=waiting,
         code=status.value,

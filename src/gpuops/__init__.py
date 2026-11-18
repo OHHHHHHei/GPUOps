@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 __all__ = ["JobRecord", "JobSpec", "JobStatus"]
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 if TYPE_CHECKING:
     from gpuops.models import JobRecord, JobSpec, JobStatus

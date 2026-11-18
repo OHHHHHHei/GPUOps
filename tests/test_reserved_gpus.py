@@ -1,7 +1,7 @@
 from datetime import timedelta
 
+from gpuops.core.capacity import gpu_capacity
 from gpuops.core.resources import GpuResource
-from gpuops.core.scheduling import reserved_gpu_indices
 from gpuops.models import Allocation, JobRecord, JobSpec, JobStatus, utc_now
 
 
@@ -35,6 +35,14 @@ def test_reservation_follows_uuid_and_ignores_expired_or_foreign_leases():
         _record("done", JobStatus.SUCCEEDED, [3], ["GPU-d"]),
     ]
 
-    reserved = reserved_gpu_indices(records, gpus, server_id="gpu01", now=utc_now())
+    by_gpu = {
+        gpu.index: [
+            job.run_id
+            for job in gpu_capacity(
+                gpu, records, server_id="gpu01", now=utc_now(), max_jobs_per_gpu=2
+            ).jobs
+        ]
+        for gpu in gpus
+    }
 
-    assert reserved == {0, 1}
+    assert by_gpu == {0: [], 1: ["running"], 2: [], 3: []}

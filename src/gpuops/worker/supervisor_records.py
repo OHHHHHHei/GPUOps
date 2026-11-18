@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from gpuops.contracts import is_valid_run_id
 from gpuops.file_io import atomic_write_bytes
 from gpuops.file_io import fsync_directory as fsync_directory
 
@@ -147,6 +146,8 @@ class SupervisorPaths:
         *,
         console_root: Path | None = None,
     ) -> SupervisorPaths:
+        from gpuops.contracts import is_valid_run_id
+
         if not is_valid_run_id(run_id):
             raise ValueError("invalid run_id")
         root.mkdir(parents=True, exist_ok=True, mode=0o700)

@@ -67,9 +67,9 @@ commands, even when the Worker is stopped or the current directory changes.
 SSH connection.
 
 The current server is contacted through the same fixed JSON RPC locally under
-the Worker Unix account; GPUOps does not SSH back to itself. Submission has no
-new server flag: the manifest's explicit `resources.host` remains authoritative
-and can select a peer with working SSH. `resources.host: "auto"` considers all
+the Worker Unix account; GPUOps does not SSH back to itself. The manifest's
+`resources.host` selects the destination, including a peer with working SSH;
+`submit --server ID` overrides it. `resources.host: "auto"` considers all
 registered servers from the control machine but only the current server by
 default when invoked from an installed server. Reconciliation follows the destination already frozen in the
 local submission journal, even when it falls outside the current default query
@@ -80,8 +80,7 @@ queues on that host without requiring a GPU sample. Explicit-host submission
 works the same way. Worker readiness is still required; actual GPU allocation
 waits for two reliable idle samples. Multi-host automatic placement needs fresh
 GPU evidence to choose a host. `status`, `doctor`, and job explanations read the
-Worker's shared sample, so repeating them is cheap. `submit --server ID`
-overrides the manifest target.
+Worker's shared sample, so repeating them is cheap.
 
 ## Active Jobs and History
 

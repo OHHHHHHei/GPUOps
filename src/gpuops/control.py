@@ -17,6 +17,7 @@ from typing import Protocol
 
 from gpuops.contracts import RunId, is_valid_run_id
 from gpuops.core.resources import ServerResourceSnapshot
+from gpuops.core.scheduling import reserved_gpu_indices
 from gpuops.file_io import atomic_write_bytes
 from gpuops.models import (
     JobRecord,
@@ -315,8 +316,6 @@ class ControlClient:
         clock: Callable[[], datetime] = utc_now,
         max_snapshot_age_seconds: float = 15.0,
     ):
-        if not targets:
-            raise ValueError("at least one remote target is required")
         if max_snapshot_age_seconds <= 0:
             raise ValueError("max_snapshot_age_seconds must be positive")
         by_id = {target.server_id: target for target in targets}
@@ -406,6 +405,10 @@ class ControlClient:
         return await self._finish_pending(entry, reconciled=True)
 
     async def _select_target(self, spec: JobSpec) -> RemoteTarget:
+        # Reconciliation reuses each journal entry's frozen target; only new
+        # submissions need a registered server.
+        if not self.targets:
+            raise HostSelectionError("no registered server can accept this job")
         requested_host = spec.resources.host
         if requested_host != "auto":
             try:
@@ -435,7 +438,7 @@ class ControlClient:
             ):
                 errors.append(f"{target.server_id}: snapshot is unhealthy or stale")
                 continue
-            evaluation = _evaluate_host(target, inspected, spec)
+            evaluation = _evaluate_host(target, inspected, spec, now)
             if evaluation is None:
                 errors.append(f"{target.server_id}: requested GPU shape is unsupported")
                 continue
@@ -621,6 +624,7 @@ def _evaluate_host(
     target: RemoteTarget,
     state: RemoteHostState,
     spec: JobSpec,
+    now: datetime,
 ) -> HostEvaluation | None:
     request = spec.resources
     gpu_by_index = state.snapshot.by_index()
@@ -641,20 +645,9 @@ def _evaluate_host(
         if len(candidate_gpus) < request.gpu_count:
             return None
 
-    reserved = {
-        gpu_index
-        for record in state.queue
-        if record.status
-        in {
-            JobStatus.LEASED,
-            JobStatus.STARTING,
-            JobStatus.RUNNING,
-            JobStatus.CANCEL_REQUESTED,
-        }
-        and record.allocation is not None
-        and record.allocation.server_id == target.server_id
-        for gpu_index in record.allocation.gpu_indices
-    }
+    reserved = reserved_gpu_indices(
+        state.queue, state.snapshot.gpus, server_id=target.server_id, now=now
+    )
     available = [
         gpu
         for gpu in candidate_gpus

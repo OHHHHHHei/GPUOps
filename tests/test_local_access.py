@@ -414,6 +414,50 @@ def test_reconcile_keeps_frozen_peer_target_accessible(tmp_path, monkeypatch, ca
     assert calls == [("get", "gpu02"), ("submit", "gpu02")]
 
 
+def test_submit_without_a_server_registry_is_not_accepted(tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "home"))
+    monkeypatch.setattr("gpuops.config.registry_path", lambda: tmp_path / "missing.json")
+    manifest = tmp_path / "job.json"
+    manifest.write_text(_spec("auto").model_dump_json(), encoding="utf-8")
+
+    assert main(["submit", str(manifest), "--json"]) == 1
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["submission_state"] == "not_accepted"
+    assert "recovery_command" not in payload
+
+
+@pytest.mark.parametrize("installed_server", [True, False])
+def test_reconcile_works_without_a_server_registry(
+    tmp_path, monkeypatch, capsys, installed_server
+) -> None:
+    home = tmp_path / "home"
+    if installed_server:
+        install_context(monkeypatch, home, "gpu01")
+    else:
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setattr("gpuops.config.registry_path", lambda: tmp_path / "missing.json")
+    journal = SubmissionJournal(tmp_path / "journal")
+    spec = _spec("gpu02")
+    journal.create_pending(
+        run_id="frozen-peer",
+        target=RemoteTarget("gpu02", "lab-gpu02"),
+        request_spec=spec,
+        frozen_spec=spec,
+        now=utc_now(),
+    )
+
+    class Transport:
+        async def get_job(self, target, run_id):
+            return JobRecord(run_id=run_id, spec=spec)
+
+    monkeypatch.setattr("gpuops.control.SubmissionJournal", lambda _path: journal)
+    monkeypatch.setattr("gpuops.transport.SshWorkerTransport", Transport)
+    assert main(["reconcile", "frozen-peer", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["submission_state"] == "accepted"
+    assert main(["reconcile", "--json"]) == 0
+
+
 def _spec(host: str) -> JobSpec:
     return JobSpec(
         id="local-access",

@@ -56,11 +56,12 @@ gpuops server add SSH_ALIAS --json
 gpuops server list --json
 ```
 
-`server add` inspects the remote installation, reuses it if the Worker is
-ready, starts a stopped Worker, and deploys only if GPUOps is missing. It waits
-up to 75 seconds for slow startup and creates no new registry entry on failure.
-Repeating add for an already ready server does not restart its Worker or upgrade
-its installed CLI. An existing `host.json` keeps its ID; otherwise the SSH alias
+`server add` inspects the remote installation, reuses it when it runs the same
+release and the Worker is ready, starts a stopped Worker, and installs the local
+release when GPUOps is missing or runs a different release. It waits up to 75
+seconds for slow startup and creates no new registry entry on failure. Repeating
+add for a ready server of the same release does not restart its Worker. An
+existing `host.json` keeps its ID; otherwise the SSH alias
 supplies the ID. The local registry is `~/.config/gpuops/servers.json` and starts
 empty.
 
@@ -129,11 +130,13 @@ heartbeat status is `running`, its PID and server ID match, and its
 timezone-aware heartbeat is not more than five seconds in the future or more
 than 75 seconds old. Missing, stale, `starting`, `degraded`, or inconsistent
 health fails closed.
-Both the client transport and remote submission handler enforce readiness.
+The remote submission handler enforces readiness.
 
 The control loop polls independent sampling children without waiting for them.
-Each GPU has a six-second budget for device checks, PCI-scoped `nvidia-smi`
-queries, and an idle-only CUDA initialization check.
+Each GPU is sampled every five seconds, counted from the previous launch, with a
+six-second budget for device checks and PCI-scoped `nvidia-smi` queries. The
+sampling children import only the standard library, so each one costs tens of
+milliseconds of CPU.
 This isolates the sampling processes, but it does not isolate NVIDIA driver
 locks. Controlled acceptance observed one targeted device query stalling sibling
 queries in the shared NVIDIA driver; process isolation cannot remove that limit.
@@ -169,15 +172,19 @@ unreadable device, or an invalid vendor/device identity, fails that card before
 any NVIDIA query is issued. A later attempt reads it again, so restoration can
 be discovered without invoking a driver that already cannot reach the card.
 
-After successful telemetry, a card that appears idle must also pass CUDA driver
+Just before leasing, the scheduler checks each selected card's CUDA driver
 initialization in a bounded child process, with visibility restricted to its
 UUID and the returned CUDA UUID verified. This catches readable telemetry with
 unusable CUDA initialization. It creates no CUDA context and runs no experiment
-or compute workload; it does not certify that every future CUDA operation will
-succeed. Occupied cards retain ordinary telemetry without this extra check.
+or compute workload. A passing card is trusted for five minutes. A failing card
+is skipped, so the job takes another eligible card or keeps waiting, and the
+card is retried after 60 seconds, doubling up to five minutes. A check that
+does not finish in ten seconds is abandoned and never stacked with another one
+for the same card. Idle servers with no waiting job run no CUDA checks; the
+Worker log records each failed check.
 
-Device and CUDA failures are shown separately in the Web console. Failed cards
-remain unavailable to the scheduler and retry with the same per-card backoff.
+Device failures are shown in the Web console. Failed cards remain unavailable
+to the scheduler and retry with the same per-card backoff.
 A successful retry clears the current error automatically and resets the normal
 sampling interval. A still-running timed-out query retains its lock; automatic
 retry never means stacking another query onto it or forcibly resetting a GPU.
@@ -254,7 +261,7 @@ reliable samples. Multi-host automatic placement needs fresh evidence to choose
 a host. Use it only when every candidate is authorized for the experiment and
 its code, environment, data, and checkpoints are ready there. An explicit
 manifest host is fixed directly and can select a configured peer over SSH;
-submission has no new server-selection flag. In all cases, the chosen host is
+`submit --server ID` overrides it. In all cases, the chosen host is
 written into the manifest and local journal before queue mutation.
 Reconciliation searches the journal's frozen destination or destinations even
 when they are outside the current default query scope, and does not recalculate
@@ -299,10 +306,8 @@ After leasing, the worker writes a durable launch intent and starts a detached
 per-job supervisor. The supervisor holds a run-specific lock, launches the argv
 command with `shell=False`, injects confirmed UUIDs into `CUDA_VISIBLE_DEVICES`, captures bounded
 combined stdout/stderr, and atomically writes receipt and result files.
-Older leases without UUID mappings retain their original index binding.
-
-New allocations persist their UUID mapping. Rollback validates queue records
-with the target release before switching; releases that cannot read these records
+Every allocation persists its UUID mapping, and a launch without one is refused.
+Rollback validates queue records with the target release before switching; releases that cannot read these records
 are refused. Use an updated client for rollback rather than bypassing that check.
 
 Receipts bind the run ID and launch token to supervisor/child process identity.
@@ -337,7 +342,7 @@ GPU Ops may own at most 1 GiB on each host across:
 The partition is 768 MiB for mutable state and 256 MiB for installation plus
 cache, with a 128 MiB share-directory cap. State includes a 640 MiB log budget.
 Each managed console log is bounded and rotated; worker logs rotate as well.
-Cleanup may remove old GPU Ops logs and archived events, but not queue records,
+Cleanup may remove old GPU Ops logs, but not queue records,
 receipts, active log reservations, or experiment-owned files.
 
 If the budget cannot fit a deployment, durable record, or log reservation, that

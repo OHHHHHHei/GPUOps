@@ -2,6 +2,8 @@
 
 import json
 import os
+import subprocess
+import sys
 import time
 from datetime import timedelta
 
@@ -135,3 +137,41 @@ def test_slow_sample_does_not_block_control_or_grant_resources(tmp_path, monkeyp
         release.touch()
         for child in set(children):
             child.wait(timeout=5)
+
+
+def test_sampling_child_does_not_import_pydantic():
+    # The child starts every few seconds per GPU; pydantic would cost ~0.1 s each.
+    check = (
+        "import sys, gpuops.worker.sampling_child; "
+        "sys.exit(any(name.startswith('pydantic') for name in sys.modules))"
+    )
+    assert subprocess.run([sys.executable, "-c", check], check=False).returncode == 0
+
+
+def test_sampling_child_writes_a_result_the_worker_accepts(tmp_path, monkeypatch):
+    from gpuops.worker import probe, sampling_child
+    from gpuops.worker.devices import GpuDevice
+
+    def run(command, **kwargs):
+        if "--query-gpu" in command[3]:
+            stdout = "0, GPU-0, 00000000:01:00.0, 24576, 300, 0, GPU, 40, 50, 250\n"
+        else:
+            stdout = ""
+        return subprocess.CompletedProcess(command, 0, stdout, "")
+
+    monkeypatch.setattr(sampling_child.subprocess, "run", run)
+    monkeypatch.setattr(probe, "check_pci_config", lambda _device: None)
+    result = tmp_path / "result.json"
+    with (tmp_path / "lock").open("w") as lock:
+        sampling_child.run_sample(
+            server_id="gpu01",
+            result_path=result,
+            lock_fd=lock.fileno(),
+            attempt_id="attempt",
+            device=GpuDevice(index=0, uuid="GPU-0", pci_bus="0000:01:00.0"),
+        )
+
+    envelope = json.loads(result.read_text())
+    snapshot = sampling._validated_current_snapshot(envelope, "gpu01")
+    assert snapshot is not None and snapshot.healthy
+    assert snapshot.gpus[0].idle and snapshot.gpus[0].memory_used_mib == 300

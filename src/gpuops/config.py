@@ -12,7 +12,6 @@ from pydantic import Field
 from gpuops.models import StrictModel
 
 # Shared defaults tolerate slow NVIDIA queries without adding job parameters.
-GPU_QUERY_TIMEOUT_SECONDS = 25.0
 MONITOR_TIMEOUT_SECONDS = 35.0
 
 

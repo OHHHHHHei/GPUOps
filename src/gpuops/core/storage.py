@@ -26,7 +26,6 @@ class StorageQuotaExceeded(StorageError):
 class StorageUsage:
     total_bytes: int
     log_bytes: int
-    event_archive_bytes: int
 
 
 @dataclass(frozen=True)
@@ -40,9 +39,8 @@ class CleanupReport:
 class StorageBudget:
     """Budget and cleanup policy for GPUOps-owned state only.
 
-    Cleanup is deliberately limited to ``logs/`` and ``event-archive/`` below
-    the state root. Queue records and arbitrary experiment outputs are never
-    cleanup candidates.
+    Cleanup is deliberately limited to ``logs/`` below the state root. Queue
+    records and arbitrary experiment outputs are never cleanup candidates.
     """
 
     def __init__(
@@ -67,13 +65,11 @@ class StorageBudget:
         self.high_watermark = high_watermark
         self.target_watermark = target_watermark
         self.logs_directory = self.root / "logs"
-        self.event_archive_directory = self.root / "event-archive"
         self.reservation_directory = self.root / ".log-reservations"
         self.lock_path = self.root / ".storage.lock"
 
         self._secure_directory(self.root)
         self._secure_directory(self.logs_directory)
-        self._secure_directory(self.event_archive_directory)
         self._secure_directory(self.reservation_directory)
         self.lock_path.touch(mode=0o600, exist_ok=True)
         os.chmod(self.lock_path, 0o600)
@@ -196,10 +192,17 @@ class StorageBudget:
         protected: set[Path],
     ) -> CleanupReport:
         before = self._usage_unlocked()
+        log_high = int(self.log_budget_bytes * self.high_watermark)
+        total_high = int(self.total_budget_bytes * self.high_watermark)
+        if (
+            before.log_bytes + additional_log_bytes <= log_high
+            and before.total_bytes + additional_bytes <= total_high
+        ):
+            # The common case: one scan, nothing to remove.
+            return CleanupReport(before=before, after=before, removed_paths=(), reclaimed_bytes=0)
         removed: list[str] = []
         protected = protected.union(self._active_log_paths_unlocked())
 
-        log_high = int(self.log_budget_bytes * self.high_watermark)
         if before.log_bytes + additional_log_bytes > log_high:
             log_target = max(
                 0,
@@ -214,18 +217,13 @@ class StorageBudget:
             )
 
         current = self._usage_unlocked()
-        total_high = int(self.total_budget_bytes * self.high_watermark)
         if current.total_bytes + additional_bytes > total_high:
             total_target = max(
                 0,
                 int(self.total_budget_bytes * self.target_watermark) - additional_bytes,
             )
-            candidates = [
-                *self._regular_files(self.logs_directory),
-                *self._regular_files(self.event_archive_directory),
-            ]
             self._remove_oldest_until(
-                candidates,
+                self._regular_files(self.logs_directory),
                 lambda: self._usage_unlocked().total_bytes,
                 total_target,
                 protected,
@@ -269,7 +267,6 @@ class StorageBudget:
                 self._directory_size(self.logs_directory)
                 + self._directory_size(self.reservation_directory)
             ),
-            event_archive_bytes=self._directory_size(self.event_archive_directory),
         )
 
     def _active_log_paths_unlocked(self) -> set[Path]:

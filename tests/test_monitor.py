@@ -9,7 +9,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from gpuops.config import GPU_QUERY_TIMEOUT_SECONDS, MONITOR_TIMEOUT_SECONDS
+from gpuops.config import MONITOR_TIMEOUT_SECONDS
+from gpuops.gpu_policy import GPU_QUERY_TIMEOUT_SECONDS
 from gpuops.monitor import MonitorService, RemoteCollector, ServerTarget
 from gpuops.monitor.formatting import format_status_table
 from gpuops.monitor.remote import COLLECTOR_SCRIPT, DOCTOR_SCRIPT

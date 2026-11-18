@@ -9,8 +9,12 @@ from pydantic import Field
 
 from gpuops.config import SchedulerSettings
 from gpuops.core.queue import ConcurrentUpdate, QueueStore, ResourceConflict
-from gpuops.core.resources import ResourceProbe, ServerResourceSnapshot
-from gpuops.core.scheduling import assess_schedule_window
+from gpuops.core.resources import GpuResource, ResourceProbe, ServerResourceSnapshot
+from gpuops.core.scheduling import (
+    ALLOCATED_STATUSES,
+    assess_schedule_window,
+    reserved_gpu_indices,
+)
 from gpuops.models import JobRecord, JobStatus, StrictModel, utc_now
 
 
@@ -43,6 +47,7 @@ class Scheduler:
         clock: Callable[[], datetime] = utc_now,
         sleeper: Callable[[float], None] = time.sleep,
         confirmation_provider: ConfirmationProvider | None = None,
+        gpu_ready: Callable[[GpuResource], bool] | None = None,
     ):
         self.store = store
         self.probe = probe
@@ -52,6 +57,8 @@ class Scheduler:
         self.clock = clock
         self.sleeper = sleeper
         self.confirmation_provider = confirmation_provider
+        # Checked only for GPUs about to be leased, so idle servers run no CUDA checks.
+        self.gpu_ready = gpu_ready
         self._consumed_samples: dict[str, datetime] = {}
 
     def tick(self) -> list[LeaseDecision]:
@@ -95,27 +102,10 @@ class Scheduler:
         if not candidates:
             return []
 
-        active = self.store.list(
-            {
-                JobStatus.LEASED,
-                JobStatus.STARTING,
-                JobStatus.RUNNING,
-                JobStatus.CANCEL_REQUESTED,
-            }
+        active = self.store.list(set(ALLOCATED_STATUSES))
+        reserved = reserved_gpu_indices(
+            active, second.gpus, server_id=self.server_id, now=second_now
         )
-        reserved = {
-            index
-            for record in active
-            if record.allocation and record.allocation.server_id == self.server_id
-            for index in record.allocation.gpu_indices
-        }
-        reserved_uuids = {
-            identity
-            for record in active
-            if record.allocation and record.allocation.server_id == self.server_id
-            for identity in record.allocation.gpu_uuids.values()
-        }
-        reserved.update(gpu.index for gpu in second.gpus if gpu.uuid in reserved_uuids)
         available = set(first.by_index()).intersection(second.by_index()).difference(reserved)
         decisions: list[LeaseDecision] = []
         for record in candidates:
@@ -125,9 +115,18 @@ class Scheduler:
             if not self._is_candidate(record, lease_now):
                 continue
             confirmed = self._confirmed_devices(first, second, lease_now)
-            selected = self._select(record, first, second, available.intersection(confirmed))
+            selected = self._select_ready(record, first, second, available, confirmed)
             if selected is None:
                 continue
+            if self.gpu_ready is not None:
+                # CUDA checks can take seconds; lease only with still-fresh evidence.
+                lease_now = self.clock()
+                if not self._usable(second, lease_now):
+                    break
+                if not self._is_candidate(record, lease_now) or not set(selected).issubset(
+                    self._confirmed_devices(first, second, lease_now)
+                ):
+                    continue
             try:
                 leased = self.store.lease(
                     record.run_id,
@@ -208,6 +207,25 @@ class Scheduler:
             self.settings.max_snapshot_age_seconds,
             now,
         )
+
+    def _select_ready(
+        self,
+        record: JobRecord,
+        first: ServerResourceSnapshot,
+        second: ServerResourceSnapshot,
+        available: set[int],
+        confirmed: set[int],
+    ) -> list[int] | None:
+        """Select GPUs, dropping any that fail the CUDA check and choosing again."""
+        while True:
+            selected = self._select(record, first, second, available.intersection(confirmed))
+            if selected is None or self.gpu_ready is None:
+                return selected
+            gpus = second.by_index()
+            unready = {index for index in selected if not self.gpu_ready(gpus[index])}
+            if not unready:
+                return selected
+            available.difference_update(unready)
 
     @staticmethod
     def _select(

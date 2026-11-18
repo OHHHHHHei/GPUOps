@@ -885,5 +885,10 @@ byId("history-next").addEventListener("click", showNextHistoryPage);
 byId("refresh-button").addEventListener("click", () => refresh({ manual: true }));
 
 const pollInterval = Number(document.body.dataset.pollInterval) || 5000;
-refresh();
-window.setInterval(refresh, pollInterval);
+// A hidden tab stops polling; showing it again refreshes at once.
+function refreshIfVisible() {
+  return document.hidden ? Promise.resolve() : refresh();
+}
+refreshIfVisible();
+window.setInterval(refreshIfVisible, pollInterval);
+document.addEventListener("visibilitychange", refreshIfVisible);

@@ -21,15 +21,7 @@ def completed(command: list[str], stdout: str = "", stderr: str = "", code: int 
 
 
 def device_probe(server_id: str, *, runner, **kwargs) -> LocalGpuProbe:
-    def scoped_runner(command, **run_kwargs):
-        if command[1:3] == ["-m", "gpuops.worker.cuda_check"]:
-            assert run_kwargs["env"]["CUDA_VISIBLE_DEVICES"] == DEVICE.uuid
-            return completed(command, f"{DEVICE.uuid}\n")
-        return runner(command, **run_kwargs)
-
-    return LocalGpuProbe(
-        server_id, runner=scoped_runner, pci_checker=lambda _device: None, **kwargs
-    )
+    return LocalGpuProbe(server_id, runner=runner, pci_checker=lambda _device: None, **kwargs)
 
 
 def test_sample_device_uses_only_scoped_queries_and_returns_one_gpu() -> None:
@@ -238,38 +230,26 @@ def test_pci_guard_prevents_driver_query_when_device_is_missing(tmp_path) -> Non
     assert calls == []
 
 
-@pytest.mark.parametrize(
-    ("cuda_result", "message"),
-    [
-        ((1, "", "cuInit failed with CUDA error 3"), "cuInit failed"),
-        ((0, "GPU-FOREIGN\n", ""), "different device identity"),
-    ],
-)
-def test_idle_device_requires_cuda_for_same_uuid(cuda_result, message) -> None:
+def test_idle_device_sampling_runs_only_scoped_nvidia_queries() -> None:
     calls = []
 
     def runner(command, **kwargs):
-        calls.append((command, kwargs))
-        if command[0] == "nvidia-smi":
-            if "--query-gpu" in command[3]:
-                return completed(
-                    command,
-                    "5, GPU-ABCDE, 00000000:81:00.0, 24576, 318, 0, GPU, 45, 60, 250\n",
-                )
-            return completed(command, "")
-        assert command[1:3] == ["-m", "gpuops.worker.cuda_check"]
-        assert command[-1] == kwargs["env"]["CUDA_VISIBLE_DEVICES"] == DEVICE.uuid
-        code, stdout, stderr = cuda_result
-        return completed(command, stdout=stdout, stderr=stderr, code=code)
+        calls.append(command[0])
+        if "--query-gpu" in command[3]:
+            return completed(
+                command,
+                "5, GPU-ABCDE, 00000000:81:00.0, 24576, 318, 0, GPU, 45, 60, 250\n",
+            )
+        return completed(command, "")
 
     sample = LocalGpuProbe(
         "gpu01", runner=runner, clock=lambda: NOW, pci_checker=lambda _device: None
     ).sample_device(DEVICE)
 
-    assert sample.error_code == "gpu_cuda_unavailable"
-    assert sample.snapshot.gpus == []
-    assert message in (sample.snapshot.error or "")
-    assert len(calls) == 3
+    # CUDA is checked just before leasing, not on every sample of an idle GPU.
+    assert sample.error_code is None
+    assert sample.snapshot.gpus[0].idle is True
+    assert calls == ["nvidia-smi", "nvidia-smi"]
 
 
 def test_busy_device_skips_cuda_check() -> None:
@@ -290,30 +270,25 @@ def test_busy_device_skips_cuda_check() -> None:
     assert sample.snapshot.gpus[0].idle is False
 
 
-def test_cuda_check_uses_remaining_shared_deadline() -> None:
+def test_process_query_that_exhausts_the_budget_times_out() -> None:
     current = [10.0]
-    timeouts = []
 
     def runner(command, **kwargs):
-        timeouts.append(kwargs["timeout"])
-        if command[0] == "nvidia-smi":
+        if "--query-gpu" in command[3]:
             current[0] += 1.0
-            if "--query-gpu" in command[3]:
-                return completed(
-                    command,
-                    "5, GPU-ABCDE, 00000000:81:00.0, 24576, 318, 0, GPU, 45, 60, 250\n",
-                )
-            return completed(command, "")
-        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+            return completed(
+                command, "5, GPU-ABCDE, 00000000:81:00.0, 24576, 318, 0, GPU, 45, 60, 250\n"
+            )
+        current[0] += 6.0
+        return completed(command, "")
 
-    sample = LocalGpuProbe(
+    sample = device_probe(
         "gpu01",
         runner=runner,
         clock=lambda: NOW,
         monotonic_clock=lambda: current[0],
         sample_timeout_seconds=6.0,
-        pci_checker=lambda _device: None,
     ).sample_device(DEVICE)
 
     assert sample.error_code == "gpu_query_timeout"
-    assert timeouts == pytest.approx([6.0, 5.0, 4.0])
+    assert sample.data is None

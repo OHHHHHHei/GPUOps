@@ -103,8 +103,7 @@ class SshWorkerTransport:
 
     async def submit(self, target: RemoteTarget, run_id: str, spec: JobSpec) -> JobRecord:
         try:
-            health = await self.health(target)
-            self._require_ready_worker(health)
+            # The remote submit checks Worker readiness and the release itself.
             result = await self._rpc(
                 target,
                 "submit",

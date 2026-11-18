@@ -302,6 +302,77 @@ def test_fifo_assignment_and_disjoint_parallel_jobs(tmp_path) -> None:
     assert [decision.gpu_indices for decision in decisions] == [[0], [1]]
 
 
+def test_gpu_failing_cuda_check_is_skipped_before_leasing(tmp_path) -> None:
+    store = QueueStore(tmp_path)
+    queued = store.enqueue(job("cuda"), now=NOW)
+    probe = Probe(snapshot(gpu(0), gpu(1)), snapshot(gpu(0), gpu(1)))
+    checked = []
+
+    def gpu_ready(resource: GpuResource) -> bool:
+        checked.append(resource.index)
+        return resource.index != 0
+
+    decisions = Scheduler(
+        store,
+        probe,
+        server_id="gpu01",
+        worker_id="worker-1",
+        settings=SchedulerSettings(idle_confirmation_delay_seconds=0),
+        clock=lambda: NOW,
+        gpu_ready=gpu_ready,
+    ).tick()
+
+    assert checked == [0, 1]
+    assert [(decision.run_id, decision.gpu_indices) for decision in decisions] == [
+        (queued.run_id, [1])
+    ]
+
+
+def test_slow_cuda_check_does_not_lease_on_stale_evidence(tmp_path) -> None:
+    store = QueueStore(tmp_path)
+    queued = store.enqueue(job("slow-cuda"), now=NOW)
+    probe = Probe(snapshot(gpu(0)), snapshot(gpu(0)))
+    now = [NOW]
+
+    def gpu_ready(_resource: GpuResource) -> bool:
+        now[0] = NOW + timedelta(seconds=20)
+        return True
+
+    decisions = Scheduler(
+        store,
+        probe,
+        server_id="gpu01",
+        worker_id="worker-1",
+        settings=SchedulerSettings(idle_confirmation_delay_seconds=0),
+        clock=lambda: now[0],
+        gpu_ready=gpu_ready,
+    ).tick()
+
+    assert decisions == []
+    assert store.get(queued.run_id).status == JobStatus.QUEUED
+
+
+def test_no_cuda_check_without_a_waiting_job(tmp_path) -> None:
+    store = QueueStore(tmp_path)
+    probe = Probe(snapshot(gpu(0)), snapshot(gpu(0)))
+
+    def gpu_ready(_resource: GpuResource) -> bool:
+        raise AssertionError("idle servers must not run CUDA checks")
+
+    assert (
+        Scheduler(
+            store,
+            probe,
+            server_id="gpu01",
+            worker_id="worker-1",
+            settings=SchedulerSettings(idle_confirmation_delay_seconds=0),
+            clock=lambda: NOW,
+            gpu_ready=gpu_ready,
+        ).tick()
+        == []
+    )
+
+
 def test_older_higher_priority_job_gets_auto_gpu_first(tmp_path) -> None:
     store = QueueStore(tmp_path)
     normal = store.enqueue(job("normal"), now=NOW)

@@ -9,11 +9,13 @@ from typing import Any, Literal, Protocol, overload
 
 from pydantic import Field, field_validator, model_validator
 
+from gpuops.gpu_policy import (
+    DEFAULT_IDLE_MEMORY_BASELINE_MIB,
+    DEFAULT_IDLE_MEMORY_TOLERANCE_MIB,
+    DEFAULT_IDLE_UTILIZATION_THRESHOLD,
+    validate_idle_limits,
+)
 from gpuops.models import StrictModel
-
-DEFAULT_IDLE_UTILIZATION_THRESHOLD = 0.0
-DEFAULT_IDLE_MEMORY_BASELINE_MIB = 384
-DEFAULT_IDLE_MEMORY_TOLERANCE_MIB = 256
 
 
 class GpuEligibility(str, Enum):
@@ -37,14 +39,11 @@ class ResourceEligibilityPolicy:
     idle_memory_tolerance_mib: int = DEFAULT_IDLE_MEMORY_TOLERANCE_MIB
 
     def __post_init__(self) -> None:
-        if not 0 <= self.idle_utilization_threshold <= 100:
-            raise ValueError("idle_utilization_threshold must be between 0 and 100")
-        for field, value in (
-            ("idle_memory_baseline_mib", self.idle_memory_baseline_mib),
-            ("idle_memory_tolerance_mib", self.idle_memory_tolerance_mib),
-        ):
-            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-                raise ValueError(f"{field} must be a non-negative integer")
+        validate_idle_limits(
+            self.idle_utilization_threshold,
+            self.idle_memory_baseline_mib,
+            self.idle_memory_tolerance_mib,
+        )
 
     @property
     def idle_memory_limit_mib(self) -> int:

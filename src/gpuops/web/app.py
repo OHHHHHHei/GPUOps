@@ -156,4 +156,5 @@ def run_web(
             live,
             SshWorkerTransport(timeout_seconds=timeout_seconds),
         )
-    uvicorn.run(create_app(provider), host=host, port=port)
+    # Browser polling would otherwise add an access-log line every few seconds.
+    uvicorn.run(create_app(provider), host=host, port=port, access_log=False)

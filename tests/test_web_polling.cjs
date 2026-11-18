@@ -93,9 +93,12 @@ async function dashboard() {
     ["/healthz", () => response({ status: "ok", servers: [] })],
   ]);
   let poll;
+  const documentListeners = {};
   const context = vm.createContext({
     Node: Element,
     document: {
+      hidden: false,
+      addEventListener(type, callback) { documentListeners[type] = callback; },
       body: { dataset: { pollInterval: "5000" } },
       getElementById(id) {
         if (!elements.has(id)) elements.set(id, new Element());
@@ -121,11 +124,25 @@ async function dashboard() {
     routes,
     requests,
     poll: () => poll(),
+    setHidden(hidden) {
+      context.document.hidden = hidden;
+      return documentListeners.visibilitychange();
+    },
     element: (id) => elements.get(id),
     detail: () => elements.get("job-detail"),
     log: () => elements.get("job-detail").children.find((node) => node.className === "log-output"),
   };
 }
+
+test("a hidden tab stops polling and refreshes when shown again", async () => {
+  const app = await dashboard();
+  const before = app.requests.length;
+  await app.setHidden(true);
+  await app.poll();
+  assert.equal(app.requests.length, before);
+  await app.setHidden(false);
+  assert.ok(app.requests.slice(before).includes("/api/v1/snapshot"));
+});
 
 test("an empty fleet explains setup and clears the warning after a server is added", async () => {
   const app = await dashboard();

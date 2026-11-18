@@ -141,8 +141,7 @@ test("a hidden tab stops polling and refreshes when shown again", async () => {
   await app.poll();
   assert.equal(app.requests.length, before);
   await app.setHidden(false);
-  assert.ok(app.requests.includes("/api/v1/snapshot"));
-  assert.ok(app.requests.length > before);
+  assert.ok(app.requests.slice(before).includes("/api/v1/snapshot"));
 });
 
 test("an empty fleet explains setup and clears the warning after a server is added", async () => {

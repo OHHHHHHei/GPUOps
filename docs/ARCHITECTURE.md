@@ -122,8 +122,7 @@ upload path, status, and rollback. Older release IDs remain valid identifiers.
 
 - A single-instance worker loop uses `flock`, a PID identity file, and an atomic
   heartbeat.
-- A filesystem queue stores one JSON record per job plus a bounded, rotatable
-  event stream.
+- A filesystem queue stores one JSON record per job plus a derived SQLite index.
 - The scheduler uses two distinct successful observations of the same GPU index
   and UUID before leasing. The per-card observations must be at least two seconds
   and at most 45 seconds apart; the latest must be at most 15 seconds old. A GPU must have no
@@ -221,8 +220,8 @@ leases on later ticks.
 A tick that raises an exception or returns per-job errors writes a `degraded`
 heartbeat. `last_tick_error` contains a bounded error summary and `tick_failures`
 counts failed iterations. A subsequent successful tick restores `running`.
-Client-side submit checks health before RPC submission, and the remote submit
-handler repeats the readiness check before creating a queue record.
+The remote submit handler checks Worker readiness and the release before
+creating a queue record.
 
 ## State Ownership
 
@@ -276,7 +275,7 @@ MiB log budget.
 
 Worker logs rotate. Each job reserves bounded console capacity (4 MiB times the
 current file plus two backups by default). Cleanup is restricted to GPU
-Ops-owned logs and event archives; queue records and experiment data are not
+Ops-owned logs; queue records and experiment data are not
 cleanup candidates. If capacity cannot be proved, new work fails closed while
 already-running supervisors continue.
 

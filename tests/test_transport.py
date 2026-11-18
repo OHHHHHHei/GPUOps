@@ -531,3 +531,43 @@ def test_host_inspection_only_requests_active_records() -> None:
         )
     )
     assert [record.run_id for record in result.queue] == ["active-run"]
+
+
+@pytest.mark.parametrize(
+    ("health", "code"),
+    [
+        (
+            {"status": "unavailable", "durable": True, "worker": {"ready": True}},
+            "worker_unavailable",
+        ),
+        ({"status": "ok", "durable": False, "worker": {"ready": True}}, "worker_unavailable"),
+        ({"status": "ok", "durable": True, "worker": {"ready": False}}, "worker_unavailable"),
+        (
+            {
+                "status": "ok",
+                "durable": True,
+                "worker": {"ready": False, "error_code": "version_mismatch"},
+            },
+            "version_mismatch",
+        ),
+    ],
+)
+def test_host_inspection_rejects_an_unready_worker(health, code) -> None:
+    import asyncio
+
+    class Collector:
+        async def collect(self, host, *, timeout_seconds):
+            return {"collected_at": datetime.now(timezone.utc).isoformat(), "gpus": []}, 0.01
+
+    def factory(request):
+        if request["method"] == "health":
+            return response(request, health)
+        return response(request, {"jobs": []})
+
+    with pytest.raises(RemoteWorkerError) as caught:
+        asyncio.run(
+            SshWorkerTransport(ssh=FakeSsh(factory), collector=Collector()).inspect(
+                RemoteTarget("gpu01", "lab-gpu01")
+            )
+        )
+    assert caught.value.code == code

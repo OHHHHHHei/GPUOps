@@ -135,7 +135,6 @@ def test_submit_is_durable_and_idempotent(tmp_path) -> None:
     assert first["result"]["job"]["run_id"] == "run-001"
     assert second["result"]["job"] == first["result"]["job"]
     assert len(rpc.queue.list()) == 1
-    assert len(rpc.queue.list()) == 1
     json.dumps(first)
 
 

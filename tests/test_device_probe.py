@@ -268,3 +268,27 @@ def test_busy_device_skips_cuda_check() -> None:
 
     assert sample.error_code is None
     assert sample.snapshot.gpus[0].idle is False
+
+
+def test_process_query_that_exhausts_the_budget_times_out() -> None:
+    current = [10.0]
+
+    def runner(command, **kwargs):
+        if "--query-gpu" in command[3]:
+            current[0] += 1.0
+            return completed(
+                command, "5, GPU-ABCDE, 00000000:81:00.0, 24576, 318, 0, GPU, 45, 60, 250\n"
+            )
+        current[0] += 6.0
+        return completed(command, "")
+
+    sample = device_probe(
+        "gpu01",
+        runner=runner,
+        clock=lambda: NOW,
+        monotonic_clock=lambda: current[0],
+        sample_timeout_seconds=6.0,
+    ).sample_device(DEVICE)
+
+    assert sample.error_code == "gpu_query_timeout"
+    assert sample.data is None

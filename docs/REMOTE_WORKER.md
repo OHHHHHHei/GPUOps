@@ -130,7 +130,7 @@ heartbeat status is `running`, its PID and server ID match, and its
 timezone-aware heartbeat is not more than five seconds in the future or more
 than 75 seconds old. Missing, stale, `starting`, `degraded`, or inconsistent
 health fails closed.
-Both the client transport and remote submission handler enforce readiness.
+The remote submission handler enforces readiness.
 
 The control loop polls independent sampling children without waiting for them.
 Each GPU is sampled every five seconds, counted from the previous launch, with a
@@ -261,7 +261,7 @@ reliable samples. Multi-host automatic placement needs fresh evidence to choose
 a host. Use it only when every candidate is authorized for the experiment and
 its code, environment, data, and checkpoints are ready there. An explicit
 manifest host is fixed directly and can select a configured peer over SSH;
-submission has no new server-selection flag. In all cases, the chosen host is
+`submit --server ID` overrides it. In all cases, the chosen host is
 written into the manifest and local journal before queue mutation.
 Reconciliation searches the journal's frozen destination or destinations even
 when they are outside the current default query scope, and does not recalculate
@@ -342,7 +342,7 @@ GPU Ops may own at most 1 GiB on each host across:
 The partition is 768 MiB for mutable state and 256 MiB for installation plus
 cache, with a 128 MiB share-directory cap. State includes a 640 MiB log budget.
 Each managed console log is bounded and rotated; worker logs rotate as well.
-Cleanup may remove old GPU Ops logs and archived events, but not queue records,
+Cleanup may remove old GPU Ops logs, but not queue records,
 receipts, active log reservations, or experiment-owned files.
 
 If the budget cannot fit a deployment, durable record, or log reservation, that

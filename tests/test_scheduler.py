@@ -73,6 +73,7 @@ def job(
     memory_mib: int = 0,
     host: str = "auto",
     priority: str = "normal",
+    exclusive: bool = True,
 ) -> JobSpec:
     return JobSpec(
         id=identifier,
@@ -84,6 +85,7 @@ def job(
             "gpu_count": count,
             "gpus": exact,
             "memory_mib": memory_mib,
+            "exclusive": exclusive,
         },
         schedule={"priority": priority},
     )
@@ -876,3 +878,102 @@ def test_cancel_race_after_launch_does_not_duplicate_start(tmp_path) -> None:
     assert completed.cancelled == [queued.run_id]
     assert fake.started == [queued.run_id]
     assert store.get(queued.run_id).status == JobStatus.CANCELLED
+
+
+@pytest.mark.parametrize(
+    ("per_card_free", "limit", "expected"),
+    [(23000, 2, 2), (22999, 2, 1), (24000, 1, 1)],
+)
+def test_same_pair_can_admit_two_shared_jobs_on_a_busy_gpu(
+    tmp_path, per_card_free, limit, expected
+):
+    store = QueueStore(tmp_path)
+    for run_id in ("a", "b", "c"):
+        store.enqueue(job(run_id, memory_mib=11500, exclusive=False), now=NOW, run_id=run_id)
+    sample = gpu(0, idle=False, free_mib=per_card_free)
+    worker = cached_scheduler(store, PairProvider(cached_pair(first_gpu=sample, second_gpu=sample)))
+    worker.settings = SchedulerSettings(max_jobs_per_gpu=limit)
+    leases = worker.tick()
+    assert [lease.run_id for lease in leases] == ["a", "b"][:expected]
+    assert all(store.get(lease.run_id).allocation.gpu_uuids == {0: "GPU-0"} for lease in leases)
+    store.request_cancel("a", now=NOW)
+    assert worker.tick() == []  # This pair was already consumed in the previous tick.
+
+
+@pytest.mark.parametrize("first_exclusive", [False, True])
+def test_shared_and_exclusive_requests_do_not_mix(tmp_path, first_exclusive):
+    store = QueueStore(tmp_path)
+    for run_id, exclusive in (("a", first_exclusive), ("b", not first_exclusive)):
+        store.enqueue(job(run_id, exclusive=exclusive, memory_mib=128), run_id=run_id, now=NOW)
+    leases = cached_scheduler(store, PairProvider(cached_pair())).tick()
+    assert [lease.run_id for lease in leases] == ["a"]
+
+
+def test_shared_multicard_request_needs_capacity_on_every_card_in_both_samples(tmp_path):
+    store = QueueStore(tmp_path)
+    store.enqueue(job("pair", count=2, memory_mib=11500, exclusive=False), now=NOW)
+    first = snapshot(gpu(0), gpu(1, free_mib=11499))
+    second = snapshot(gpu(0), gpu(1, free_mib=12000))
+    assert scheduler(store, Probe(first, second)).tick() == []
+    assert not store.list({JobStatus.LEASED})
+
+
+@pytest.mark.parametrize(("memory", "limit"), [(1000, 2), (11500, 3)])
+def test_concurrent_shared_leases_charge_under_the_queue_lock(tmp_path, memory, limit):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    from gpuops.core.queue import ResourceConflict
+
+    store = QueueStore(tmp_path)
+    pair = cached_pair()
+    for run_id in ("first", "a", "b"):
+        store.enqueue(job(run_id, exclusive=False, memory_mib=memory), now=NOW, run_id=run_id)
+
+    def grant(run_id):
+        store.lease(
+            run_id,
+            server_id="gpu01",
+            worker_id="w",
+            expected_revision=0,
+            gpu_indices=[0],
+            gpu_uuids={0: "GPU-0"},
+            samples=pair,
+            max_jobs_per_gpu=limit,
+            now=NOW,
+            ttl=timedelta(seconds=30),
+        )
+
+    grant("first")
+    barrier = Barrier(2)
+
+    def compete(run_id):
+        barrier.wait()
+        try:
+            grant(run_id)
+        except ResourceConflict:
+            return False
+        return True
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert sorted(pool.map(compete, ("a", "b"))) == [False, True]
+    assert len(store.list({JobStatus.LEASED})) == 2
+
+
+def test_worker_loads_optional_server_slot_limit(tmp_path, monkeypatch):
+    from gpuops.config import load_scheduler_settings
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert load_scheduler_settings().max_jobs_per_gpu == 2
+    config = tmp_path / ".config/gpuops/scheduler.json"
+    config.parent.mkdir(parents=True)
+    config.write_text('{"max_jobs_per_gpu": 3}')
+    assert load_scheduler_settings().max_jobs_per_gpu == 3
+    for value in ("0", "true"):
+        config.write_text('{"max_jobs_per_gpu": ' + value + "}")
+        with pytest.raises(ValueError, match="invalid scheduler configuration"):
+            load_scheduler_settings()
+
+    config.write_text('{"max_snapshot_age_seconds": 1}')
+    with pytest.raises(ValueError, match="invalid scheduler configuration"):
+        load_scheduler_settings()

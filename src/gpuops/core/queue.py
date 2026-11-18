@@ -11,8 +11,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from gpuops.config import DEFAULT_MAX_JOBS_PER_GPU
 from gpuops.contracts import is_valid_run_id
+from gpuops.core.capacity import ALLOCATED_STATUSES, gpu_capacity, records_on_gpu
 from gpuops.core.queue_index import QueueIndex
+from gpuops.core.resources import ServerResourceSnapshot
 from gpuops.core.state_machine import ensure_transition
 from gpuops.core.storage import StorageBudget
 from gpuops.file_io import atomic_write_bytes
@@ -222,6 +225,8 @@ class QueueStore:
         expected_revision: int,
         now: datetime | None = None,
         gpu_uuids: dict[int, str] | None = None,
+        samples: tuple[ServerResourceSnapshot, ServerResourceSnapshot] | None = None,
+        max_jobs_per_gpu: int = DEFAULT_MAX_JOBS_PER_GPU,
     ) -> JobRecord:
         timestamp = now or utc_now()
         with self._lock():
@@ -238,23 +243,33 @@ class QueueStore:
             requested = set(gpu_indices)
             if len(requested) != len(gpu_indices):
                 raise ResourceConflict("leased GPU indices must be unique")
-            for other in self._records_for_statuses_unlocked(
-                {
-                    JobStatus.LEASED,
-                    JobStatus.STARTING,
-                    JobStatus.RUNNING,
-                    JobStatus.CANCEL_REQUESTED,
-                }
-            ):
-                if other.run_id == run_id or other.allocation is None:
-                    continue
-                if other.allocation.server_id == server_id and (
-                    requested.intersection(other.allocation.gpu_indices)
-                    or set((gpu_uuids or {}).values()).intersection(
-                        other.allocation.gpu_uuids.values()
+            active = self._records_for_statuses_unlocked(set(ALLOCATED_STATUSES))
+            if samples is None:
+                # Direct exclusive leases can be created without telemetry.
+                if not request.exclusive:
+                    raise ResourceConflict("shared leases require GPU samples")
+                for index in requested:
+                    holders = records_on_gpu(
+                        index, (gpu_uuids or {}).get(index), active, server_id=server_id, now=None
                     )
-                ):
-                    raise ResourceConflict(f"GPU allocation conflicts with {other.run_id}")
+                    if any(holders):
+                        raise ResourceConflict(f"GPU {index} already has an allocation")
+            else:
+                for snapshot in samples:
+                    cards = snapshot.by_index()
+                    for index in requested:
+                        gpu = cards.get(index)
+                        if gpu is None or gpu.uuid != (gpu_uuids or {}).get(index):
+                            raise ResourceConflict(f"GPU {index} identity changed")
+                        capacity = gpu_capacity(
+                            gpu,
+                            active,
+                            server_id=server_id,
+                            now=None,
+                            max_jobs_per_gpu=max_jobs_per_gpu,
+                        )
+                        if blocker := capacity.blocker(request):
+                            raise ResourceConflict(f"GPU {index}: {blocker}")
             allocation = Allocation(
                 server_id=server_id,
                 gpu_indices=gpu_indices,

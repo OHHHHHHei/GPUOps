@@ -15,7 +15,8 @@ from typing import Any
 from pydantic import ValidationError
 
 from gpuops import __version__
-from gpuops.config import SchedulerSettings
+from gpuops.config import load_scheduler_settings
+from gpuops.core.capacity import ALLOCATED_STATUSES
 from gpuops.core.queue import QueueStore
 from gpuops.core.scheduler import Scheduler
 from gpuops.core.storage import StorageBudget
@@ -116,12 +117,13 @@ def build_worker_runtime(
     cached_probe = CachedGpuProbe(state, server_id)
     # One checker serves the scheduler and the published GPU sample.
     cuda_readiness = CudaReadiness()
+    settings = load_scheduler_settings()
     scheduler = Scheduler(
         store,
         cached_probe,
         server_id=server_id,
         worker_id=worker_id,
-        settings=SchedulerSettings(),
+        settings=settings,
         confirmation_provider=cached_probe,
         gpu_ready=cuda_readiness,
     )
@@ -134,7 +136,11 @@ def build_worker_runtime(
         tick=worker.tick,
         interval_seconds=interval_seconds,
         sampler_factory=lambda: AsyncGpuSampler(
-            state, server_id, gpu_unavailable=cuda_readiness.unavailable
+            state,
+            server_id,
+            gpu_unavailable=cuda_readiness.unavailable,
+            active_jobs=lambda: store.list(set(ALLOCATED_STATUSES)),
+            max_jobs_per_gpu=settings.max_jobs_per_gpu,
         ),
         notifier_factory=lambda: JobNotifier(store, server_id, state),
     )

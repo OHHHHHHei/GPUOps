@@ -118,5 +118,5 @@ def gpu_capacity(
         jobs=jobs,
         max_jobs_per_gpu=max_jobs_per_gpu,
         available_memory_mib=available,
-        idle=gpu.idle and gpu.process_count == 0,
+        idle=gpu.can_allocate(0),
     )

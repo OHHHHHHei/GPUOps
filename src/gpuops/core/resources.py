@@ -9,6 +9,7 @@ from typing import Any, Literal, Protocol, overload
 
 from pydantic import Field, field_validator, model_validator
 
+from gpuops.config import DEFAULT_MAX_JOBS_PER_GPU
 from gpuops.gpu_policy import (
     DEFAULT_IDLE_MEMORY_BASELINE_MIB,
     DEFAULT_IDLE_MEMORY_TOLERANCE_MIB,
@@ -217,7 +218,7 @@ class ServerResourceSnapshot(StrictModel):
     healthy: bool = True
     error: str | None = None
     gpus: list[GpuResource] = Field(default_factory=list)
-    max_jobs_per_gpu: int = Field(default=2, ge=1)
+    max_jobs_per_gpu: int = Field(default=DEFAULT_MAX_JOBS_PER_GPU, ge=1)
 
     @field_validator("sampled_at")
     @classmethod

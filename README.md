@@ -15,13 +15,13 @@ Windows control machines and non-NVIDIA accelerators are outside this release.
 ## Install
 
 You need Python 3.10+ and OpenSSH (`ssh` and `scp`) on the control machine.
-The following download commands apply when v0.4.0 is published; before publication,
-use the source installation below. Install the [v0.4.0 release](https://github.com/OHHHHHHei/GPUOps/releases/tag/v0.4.0)
+The following download commands apply when v0.5.0 is published; before publication,
+use the source installation below. Install the [v0.5.0 release](https://github.com/OHHHHHHei/GPUOps/releases/tag/v0.5.0)
 with [uv](https://docs.astral.sh/uv/getting-started/installation/), including the
 optional Web console:
 
 ```bash
-uv tool install 'gpuops[web] @ https://github.com/OHHHHHHei/GPUOps/releases/download/v0.4.0/gpuops-0.4.0-py3-none-any.whl'
+uv tool install 'gpuops[web] @ https://github.com/OHHHHHHei/GPUOps/releases/download/v0.5.0/gpuops-0.5.0-py3-none-any.whl'
 gpuops version --json
 ```
 
@@ -34,7 +34,7 @@ virtual environment:
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install './gpuops-0.4.0-py3-none-any.whl[web]'
+.venv/bin/python -m pip install './gpuops-0.5.0-py3-none-any.whl[web]'
 .venv/bin/gpuops version --json
 ```
 
@@ -119,8 +119,12 @@ available when you want to check it without submitting.
 
 Omit `resources.gpus` for normal use: the Worker chooses eligible physical GPUs
 within the requested host and count. Use `gpus` when you require particular
-physical indices. `memory_mib` is required free memory per GPU, not a runtime
-limit. `host: "auto"` also chooses the server; use it only when every candidate
+physical indices. By default jobs run exclusively and require `memory_mib` free
+per GPU. For sharing, set `"exclusive": false` and request a positive per-GPU
+`memory_mib`. The Worker reserves that amount until release and admits up to two
+managed jobs per card by default. GPU memory usage is unrestricted at runtime.
+
+`host: "auto"` also chooses the server. Use it only when every candidate
 is authorized and has the experiment assets prepared. Host selection is frozen
 before submission and recovery keeps that destination.
 
@@ -256,12 +260,13 @@ round's SSH calls and errors. `gpuops alerts disable` and
 ## Operating boundary and maintenance
 
 The queue coordinates jobs sharing one trusted Unix account on each server.
-The Worker avoids GPUs occupied by visible unmanaged processes, including other
-users' work. Its leases coordinate GPUOps jobs in that account; they do not
-enforce exclusivity against other Unix users or programs that bypass GPUOps.
+External GPU processes block exclusive jobs. Shared jobs account for their
+observed usage and can run alongside them if memory is available. The Worker's
+leases coordinate jobs in that account. Other users can start programs directly
+at any time.
 Cancellation only signals identity-verified managed processes.
 
-GPUOps confirms idle GPUs twice before allocation and binds launches to device
+GPUOps confirms GPU capacity twice before allocation and binds launches to device
 UUIDs. Failed devices are retried automatically. GPU telemetry comes from the
 Worker's shared samples; repeated queries do not start extra probes.
 

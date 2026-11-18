@@ -136,8 +136,8 @@ class ResourceRequest(StrictModel):
 
     @model_validator(mode="after")
     def exact_count_matches(self) -> ResourceRequest:
-        if not self.exclusive:
-            raise ValueError("shared GPU scheduling is not supported; exclusive must be true")
+        if not self.exclusive and self.memory_mib == 0:
+            raise ValueError("shared GPU jobs require a positive memory_mib per GPU")
         if self.gpus is not None and len(self.gpus) != self.gpu_count:
             raise ValueError("gpu_count must equal the number of exact gpus")
         return self
@@ -317,6 +317,11 @@ class JobSummary(StrictModel):
     status: JobStatus
     priority: Priority
     gpus: list[int]
+    requested_gpus: list[int] | None
+    allocated_gpus: list[int]
+    gpu_uuids: dict[int, str]
+    exclusive: bool
+    memory_mib: int
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
@@ -324,18 +329,20 @@ class JobSummary(StrictModel):
 
     @classmethod
     def from_record(cls, record: JobRecord) -> JobSummary:
-        allocation = record.allocation
+        resources = record.spec.resources
+        allocated_gpus = record.allocation.gpu_indices if record.allocation else []
         return cls(
             run_id=record.run_id,
             name=record.spec.metadata.get("name") or record.spec.id,
             project=record.spec.project,
             status=record.status,
             priority=record.spec.schedule.priority,
-            gpus=(
-                list(allocation.gpu_indices)
-                if allocation is not None
-                else list(record.spec.resources.gpus or [])
-            ),
+            gpus=allocated_gpus or resources.gpus or [],
+            requested_gpus=resources.gpus,
+            allocated_gpus=allocated_gpus,
+            gpu_uuids=record.allocation.gpu_uuids if record.allocation else {},
+            exclusive=resources.exclusive,
+            memory_mib=resources.memory_mib,
             created_at=record.created_at,
             started_at=record.launch.started_at if record.launch is not None else None,
             finished_at=record.finished_at,

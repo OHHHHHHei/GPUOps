@@ -13,6 +13,7 @@ from gpuops.models import StrictModel
 
 # Shared defaults tolerate slow NVIDIA queries without adding job parameters.
 MONITOR_TIMEOUT_SECONDS = 35.0
+DEFAULT_MAX_JOBS_PER_GPU = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,10 +172,25 @@ def select_client_targets(server_ids: list[str] | None = None) -> tuple[ServerTa
     return tuple(item for item in targets if item.id in server_ids)
 
 
-class SchedulerSettings(StrictModel):
+class ServerGpuSettings(StrictModel):
+    max_jobs_per_gpu: int = Field(default=DEFAULT_MAX_JOBS_PER_GPU, ge=1, strict=True)
+
+
+class SchedulerSettings(ServerGpuSettings):
     lease_ttl_seconds: float = Field(default=30.0, gt=0)
     idle_confirmation_delay_seconds: float = Field(default=2.0, ge=0)
     max_snapshot_age_seconds: float = Field(default=15.0, gt=0)
+
+
+def load_scheduler_settings() -> SchedulerSettings:
+    path = Path.home() / ".config/gpuops/scheduler.json"
+    try:
+        configured = ServerGpuSettings.model_validate_json(path.read_bytes())
+        return SchedulerSettings(max_jobs_per_gpu=configured.max_jobs_per_gpu)
+    except FileNotFoundError:
+        return SchedulerSettings()
+    except ValueError as error:
+        raise ValueError(f"invalid scheduler configuration {path}: {error}") from error
 
 
 class WorkerSettings(StrictModel):

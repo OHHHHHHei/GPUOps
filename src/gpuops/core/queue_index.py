@@ -14,7 +14,7 @@ from gpuops.core.storage import StorageBudget, StorageQuotaExceeded
 from gpuops.file_io import fsync_directory
 from gpuops.models import PRIORITY_ORDER, JobRecord, JobStatus, JobSummary
 
-INDEX_SCHEMA_VERSION = 1
+INDEX_SCHEMA_VERSION = 2
 INDEX_FILENAME = "queue-index.sqlite3"
 _TERMINAL_STATUSES = (
     JobStatus.SUCCEEDED.value,
@@ -374,7 +374,11 @@ class QueueIndex:
                 status TEXT NOT NULL,
                 priority TEXT NOT NULL,
                 priority_rank INTEGER NOT NULL,
-                gpus TEXT NOT NULL,
+                requested_gpus TEXT NOT NULL,
+                allocated_gpus TEXT NOT NULL,
+                gpu_uuids TEXT NOT NULL,
+                exclusive INTEGER NOT NULL,
+                memory_mib INTEGER NOT NULL,
                 created_at TEXT NOT NULL,
                 created_us INTEGER NOT NULL,
                 started_at TEXT,
@@ -400,17 +404,22 @@ class QueueIndex:
         connection.execute(
             """
             INSERT INTO jobs (
-                run_id, name, project, status, priority, priority_rank, gpus,
+                run_id, name, project, status, priority, priority_rank,
+                requested_gpus, allocated_gpus, gpu_uuids, exclusive, memory_mib,
                 created_at, created_us, started_at, finished_at, finished_us,
                 expected_duration_us, payload_bytes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(run_id) DO UPDATE SET
                 name = excluded.name,
                 project = excluded.project,
                 status = excluded.status,
                 priority = excluded.priority,
                 priority_rank = excluded.priority_rank,
-                gpus = excluded.gpus,
+                requested_gpus = excluded.requested_gpus,
+                allocated_gpus = excluded.allocated_gpus,
+                gpu_uuids = excluded.gpu_uuids,
+                exclusive = excluded.exclusive,
+                memory_mib = excluded.memory_mib,
                 created_at = excluded.created_at,
                 created_us = excluded.created_us,
                 started_at = excluded.started_at,
@@ -445,7 +454,11 @@ def _summary_values(summary: JobSummary) -> tuple[object, ...]:
         summary.status.value,
         summary.priority.value,
         PRIORITY_ORDER[summary.priority],
-        json.dumps(summary.gpus, separators=(",", ":")),
+        json.dumps(summary.requested_gpus, separators=(",", ":")),
+        json.dumps(summary.allocated_gpus, separators=(",", ":")),
+        json.dumps(summary.gpu_uuids, separators=(",", ":")),
+        summary.exclusive,
+        summary.memory_mib,
         summary.created_at.isoformat(),
         _datetime_microseconds(summary.created_at),
         summary.started_at.isoformat() if summary.started_at is not None else None,
@@ -462,13 +475,20 @@ def _summary_values(summary: JobSummary) -> tuple[object, ...]:
 
 def _summary_from_row(row: sqlite3.Row) -> JobSummary:
     expected_duration_us = row["expected_duration_us"]
+    requested = json.loads(row["requested_gpus"])
+    allocated = json.loads(row["allocated_gpus"])
     return JobSummary(
         run_id=row["run_id"],
         name=row["name"],
         project=row["project"],
         status=row["status"],
         priority=row["priority"],
-        gpus=json.loads(row["gpus"]),
+        gpus=allocated or requested or [],
+        requested_gpus=requested,
+        allocated_gpus=allocated,
+        gpu_uuids=json.loads(row["gpu_uuids"]),
+        exclusive=bool(row["exclusive"]),
+        memory_mib=row["memory_mib"],
         created_at=datetime.fromisoformat(row["created_at"]),
         started_at=(
             datetime.fromisoformat(row["started_at"]) if row["started_at"] is not None else None

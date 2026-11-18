@@ -477,6 +477,57 @@ def test_show_explains_gpu_evidence_without_overstating_certainty(
     assert probe.calls == 1
 
 
+@pytest.mark.parametrize(
+    ("limit", "free_mib", "code"),
+    [(1, 24000, "gpu_job_limit_reached"), (2, 22500, "insufficient_free_memory")],
+)
+def test_show_explains_shared_slot_and_memory_reservations(tmp_path, limit, free_mib, code):
+    sample = gpu_snapshot(gpu(0, idle=False, free_mib=free_mib)).model_copy(
+        update={"max_jobs_per_gpu": limit}
+    )
+    rpc = WorkerRpc(
+        tmp_path,
+        server_id="gpu01",
+        clock=lambda: NOW,
+        readiness_probe=lambda: (True, "ready"),
+        resource_probe=ExplanationProbe(sample),
+    )
+    spec = JobSpec.model_validate(
+        {
+            **job_spec(),
+            "resources": {"host": "gpu01", "exclusive": False, "memory_mib": 11500},
+        }
+    )
+    first = rpc.queue.enqueue(spec, run_id="leased", now=NOW)
+    rpc.queue.lease(
+        first.run_id,
+        server_id="gpu01",
+        worker_id="worker",
+        gpu_indices=[0],
+        gpu_uuids={0: "GPU-0"},
+        samples=(sample, sample),
+        max_jobs_per_gpu=limit,
+        ttl=timedelta(seconds=30),
+        expected_revision=first.revision,
+        now=NOW,
+    )
+    rpc.queue.enqueue(spec, run_id="waiting", now=NOW)
+
+    response = rpc.handle(envelope("show", {"run_id": "waiting", "explain": True}))
+    explanation = response["result"]["explanation"]
+    assert explanation["code"] == code
+    assert explanation["details"]["requested_memory_mib"] == 11500
+    assert explanation["details"]["blocked_gpus"] == [
+        {
+            "gpu_index": 0,
+            "reason": code,
+            "max_jobs_per_gpu": limit,
+            "available_memory_mib": free_mib - 11500,
+            "jobs": [{"run_id": "leased", "exclusive": False, "memory_mib": 11500}],
+        }
+    ]
+
+
 def test_show_validates_snapshot_freshness_after_probe_finishes(tmp_path) -> None:
     sampled_at = NOW + timedelta(milliseconds=500)
     probe = ExplanationProbe(gpu_snapshot(gpu(0)).model_copy(update={"sampled_at": sampled_at}))
@@ -548,7 +599,7 @@ def test_show_preserves_job_when_probe_returns_unhealthy_snapshot(tmp_path) -> N
     assert response["result"]["explanation"]["details"] == {"error": "GPU probe failed"}
 
 
-def test_show_explains_nonqueued_states_without_worker_or_gpu_probes(tmp_path) -> None:
+def test_show_explains_nonqueued_states_without_worker_or_gpu_probes(tmp_path, monkeypatch) -> None:
     probe = ExplanationProbe(error=AssertionError("GPU probe should not run"))
 
     def unexpected_readiness() -> tuple[bool, str]:
@@ -653,6 +704,14 @@ def test_show_explains_nonqueued_states_without_worker_or_gpu_probes(tmp_path) -
     )
     assert explanations[JobStatus.FAILED]["next_action"] == "inspect_logs"
     assert probe.calls == 0
+
+    def unreadable_peer(_statuses):
+        raise OSError("cannot read another active job")
+
+    monkeypatch.setattr(rpc.queue, "list", unreadable_peer)
+    result = rpc.show({"run_id": running.run_id, "explain": True})
+    assert result["job"]["status"] == "running"
+    assert "cannot read another active job" in result["explanation"]["details"]["gpu_peers_error"]
 
 
 def test_logs_return_bounded_tail_across_console_log_files(tmp_path) -> None:

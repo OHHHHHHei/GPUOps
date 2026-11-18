@@ -49,8 +49,10 @@ absolute remote `working_directory`.
 
 Default to automatic GPU allocation: set the prepared, authorized
 `resources.host`, omit `resources.gpus`, and request the needed `gpu_count`
-(default one). Set realistic `memory_mib`, which means required free memory per
-GPU. Authorization to run an experiment includes selecting eligible physical
+(default one). Jobs are exclusive by default and need `memory_mib` free on each
+GPU. For jobs intended to share, set `resources.exclusive: false` and request
+the expected per-card peak with a positive `memory_mib`. That memory stays
+reserved from lease until release. Authorization to run an experiment includes selecting eligible physical
 GPUs within that host/count scope; do not ask for GPU-ID confirmation or pin
 currently idle IDs. Insufficient capacity means waiting in the queue.
 
@@ -118,8 +120,9 @@ process merely because it appears in `status`. Inspect Worker, queue, job, and
 logs when scheduling fails; do not bypass the queue with direct execution
 without explicit authorization.
 
-One trusted Unix account shares the Worker queue, and other users' processes
-are avoided. Accepted work continues while the control machine is offline.
+One trusted Unix account shares the Worker queue. External compute processes
+block exclusive jobs. Shared jobs may run alongside them when the remaining
+memory budget permits. Accepted work continues while the control machine is offline.
 Workers need an explicit `fleet start` after a server reboot.
 
 ## Optional ETA and Web

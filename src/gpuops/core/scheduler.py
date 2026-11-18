@@ -8,13 +8,10 @@ from typing import Protocol
 from pydantic import Field
 
 from gpuops.config import SchedulerSettings
+from gpuops.core.capacity import ALLOCATED_STATUSES, gpu_capacity
 from gpuops.core.queue import ConcurrentUpdate, QueueStore, ResourceConflict
 from gpuops.core.resources import GpuResource, ResourceProbe, ServerResourceSnapshot
-from gpuops.core.scheduling import (
-    ALLOCATED_STATUSES,
-    assess_schedule_window,
-    reserved_gpu_indices,
-)
+from gpuops.core.scheduling import assess_schedule_window
 from gpuops.models import JobRecord, JobStatus, StrictModel, utc_now
 
 
@@ -103,10 +100,10 @@ class Scheduler:
             return []
 
         active = self.store.list(set(ALLOCATED_STATUSES))
-        reserved = reserved_gpu_indices(
-            active, second.gpus, server_id=self.server_id, now=second_now
-        )
-        available = set(first.by_index()).intersection(second.by_index()).difference(reserved)
+        first_cards, second_cards = first.by_index(), second.by_index()
+        available = set(first_cards).intersection(second_cards)
+        # A confirmed pair may serve multiple shared leases in this tick only.
+        previous_consumed = self._consumed_samples.copy()
         decisions: list[LeaseDecision] = []
         for record in candidates:
             lease_now = self.clock()
@@ -114,8 +111,23 @@ class Scheduler:
                 break
             if not self._is_candidate(record, lease_now):
                 continue
-            confirmed = self._confirmed_devices(first, second, lease_now)
-            selected = self._select_ready(record, first, second, available, confirmed)
+            confirmed = self._confirmed_devices(first, second, lease_now, previous_consumed)
+            eligible = {
+                index
+                for index in confirmed.intersection(available)
+                if all(
+                    gpu_capacity(
+                        cards[index],
+                        active,
+                        server_id=self.server_id,
+                        now=lease_now,
+                        max_jobs_per_gpu=self.settings.max_jobs_per_gpu,
+                    ).blocker(record.spec.resources)
+                    is None
+                    for cards in (first_cards, second_cards)
+                )
+            }
+            selected = self._select_ready(record, second_cards, available, eligible)
             if selected is None:
                 continue
             if self.gpu_ready is not None:
@@ -124,7 +136,7 @@ class Scheduler:
                 if not self._usable(second, lease_now):
                     break
                 if not self._is_candidate(record, lease_now) or not set(selected).issubset(
-                    self._confirmed_devices(first, second, lease_now)
+                    self._confirmed_devices(first, second, lease_now, previous_consumed)
                 ):
                     continue
             try:
@@ -132,7 +144,9 @@ class Scheduler:
                     record.run_id,
                     server_id=self.server_id,
                     gpu_indices=selected,
-                    gpu_uuids={index: second.by_index()[index].uuid for index in selected},
+                    gpu_uuids={index: second_cards[index].uuid for index in selected},
+                    samples=(first, second),
+                    max_jobs_per_gpu=self.settings.max_jobs_per_gpu,
                     worker_id=self.worker_id,
                     ttl=timedelta(seconds=self.settings.lease_ttl_seconds),
                     expected_revision=record.revision,
@@ -140,9 +154,9 @@ class Scheduler:
                 )
             except (ConcurrentUpdate, ResourceConflict):
                 continue
-            available.difference_update(selected)
+            active.append(leased)
             for index in selected:
-                gpu = second.by_index()[index]
+                gpu = second_cards[index]
                 self._consumed_samples[gpu.uuid] = gpu.sampled_at or second.sampled_at
             assert leased.allocation is not None
             decisions.append(
@@ -173,6 +187,7 @@ class Scheduler:
         first: ServerResourceSnapshot,
         second: ServerResourceSnapshot,
         now: datetime,
+        previous_consumed: dict[str, datetime],
     ) -> set[int]:
         first_by_index = first.by_index()
         second_by_index = second.by_index()
@@ -192,7 +207,7 @@ class Scheduler:
             ):
                 if not 2 <= (second_at - first_at).total_seconds() <= 45:
                     continue
-                consumed = self._consumed_samples.get(latest.uuid)
+                consumed = previous_consumed.get(latest.uuid)
                 if consumed is not None and second_at <= consumed:
                     continue
             confirmed.add(index)
@@ -211,40 +226,20 @@ class Scheduler:
     def _select_ready(
         self,
         record: JobRecord,
-        first: ServerResourceSnapshot,
-        second: ServerResourceSnapshot,
+        cards: dict[int, GpuResource],
         available: set[int],
-        confirmed: set[int],
+        eligible: set[int],
     ) -> list[int] | None:
-        """Select GPUs, dropping any that fail the CUDA check and choosing again."""
+        """Drop CUDA failures for the rest of this tick and try another candidate GPU."""
+        request = record.spec.resources
         while True:
-            selected = self._select(record, first, second, available.intersection(confirmed))
-            if selected is None or self.gpu_ready is None:
+            selected = request.gpus or sorted(eligible)[: request.gpu_count]
+            if len(selected) != request.gpu_count or not eligible.issuperset(selected):
+                return None
+            if self.gpu_ready is None:
                 return selected
-            gpus = second.by_index()
-            unready = {index for index in selected if not self.gpu_ready(gpus[index])}
+            unready = {index for index in selected if not self.gpu_ready(cards[index])}
             if not unready:
                 return selected
             available.difference_update(unready)
-
-    @staticmethod
-    def _select(
-        record: JobRecord,
-        first: ServerResourceSnapshot,
-        second: ServerResourceSnapshot,
-        available: set[int],
-    ) -> list[int] | None:
-        request = record.spec.resources
-        first_by_index = first.by_index()
-        second_by_index = second.by_index()
-        eligible = [
-            index
-            for index in sorted(available)
-            if first_by_index[index].can_allocate(request.memory_mib)
-            and second_by_index[index].can_allocate(request.memory_mib)
-        ]
-        if request.gpus is not None:
-            return list(request.gpus) if set(request.gpus).issubset(eligible) else None
-        if len(eligible) < request.gpu_count:
-            return None
-        return eligible[: request.gpu_count]
+            eligible.difference_update(unready)

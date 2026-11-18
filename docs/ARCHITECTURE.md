@@ -125,9 +125,11 @@ upload path, status, and rollback. Older release IDs remain valid identifiers.
 - A filesystem queue stores one JSON record per job plus a derived SQLite index.
 - The scheduler uses two distinct successful observations of the same GPU index
   and UUID before leasing. The per-card observations must be at least two seconds
-  and at most 45 seconds apart; the latest must be at most 15 seconds old. A GPU must have no
-  visible compute process, acceptable utilization and calibrated idle-memory
-  use, enough requested free memory, and no conflicting lease.
+  and at most 45 seconds apart; the latest must be at most 15 seconds old. Exclusive jobs require an idle card
+  and no conflicting lease. Shared jobs require an available job slot and enough
+  per-card memory after reserving the unused part of each managed request.
+  Scheduler selection and the queue's locked lease decision use the same capacity
+  function.
 - A lease persists the selected index-to-UUID mapping. The supervisor launches
   the job with those UUIDs in `CUDA_VISIBLE_DEVICES`, so an index reorder between
   observation and launch does not redirect the job to another physical card.
@@ -294,10 +296,10 @@ searches the journal's frozen destination even when it is outside the current
 default query scope.
 
 An explicit host bypasses auto-placement but does not bypass the worker health
-gate. `resources.memory_mib` defaults to 1 GiB of required free memory per GPU;
-real workloads should declare their requirement explicitly. Exclusive
-allocation among jobs in this Worker queue is the only supported mode. It does
-not enforce exclusivity against other Unix accounts or programs outside GPUOps.
+gate. `resources.memory_mib` defaults to 1 GiB per GPU. Jobs default to
+exclusive allocation. Shared jobs opt in with `resources.exclusive: false`
+and reserve per-card memory from lease until release. The server's
+`max_jobs_per_gpu` counts managed jobs and defaults to two.
 
 ```text
 QUEUED -> LEASED -> STARTING -> RUNNING -> SUCCEEDED

@@ -9,9 +9,17 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from gpuops.core.queue import QueueStore
-from gpuops.core.queue_index import INDEX_FILENAME
+from gpuops.core.queue_index import INDEX_FILENAME, INDEX_SCHEMA_VERSION
 from gpuops.core.storage import StorageBudget
-from gpuops.models import JobRecord, JobSpec, JobStatus, JobSummary, LaunchInfo, Priority
+from gpuops.models import (
+    DEFAULT_GPU_MEMORY_HEADROOM_MIB,
+    JobRecord,
+    JobSpec,
+    JobStatus,
+    JobSummary,
+    LaunchInfo,
+    Priority,
+)
 
 NOW = datetime(2026, 9, 20, 10, 0, tzinfo=timezone.utc)
 
@@ -90,6 +98,11 @@ def test_job_summary_projects_only_safe_queue_fields() -> None:
         status=JobStatus.RUNNING,
         priority=Priority.HIGH,
         gpus=[2],
+        requested_gpus=[3],
+        allocated_gpus=[2],
+        gpu_uuids={},
+        exclusive=True,
+        memory_mib=DEFAULT_GPU_MEMORY_HEADROOM_MIB,
         created_at=NOW,
         started_at=NOW + timedelta(seconds=2),
         finished_at=None,
@@ -145,6 +158,11 @@ def test_literal_legacy_record_builds_index_on_first_summary_read(tmp_path) -> N
             status=JobStatus.SUCCEEDED,
             priority=Priority.LOW,
             gpus=[],
+            requested_gpus=None,
+            allocated_gpus=[],
+            gpu_uuids={},
+            exclusive=True,
+            memory_mib=DEFAULT_GPU_MEMORY_HEADROOM_MIB,
             created_at=datetime(2026, 9, 19, 10, 0, tzinfo=timezone.utc),
             started_at=datetime(2026, 9, 19, 10, 0, 10, tzinfo=timezone.utc),
             finished_at=datetime(2026, 9, 19, 10, 2, tzinfo=timezone.utc),
@@ -296,12 +314,12 @@ def test_missing_and_old_index_rebuild_from_authoritative_records(tmp_path) -> N
     assert QueueStore(tmp_path).history(server_id="gpu01") == [JobSummary.from_record(finished)]
 
     with sqlite3.connect(index_path) as connection:
-        connection.execute("UPDATE metadata SET value = '0' WHERE key = 'schema_version'")
+        connection.execute("UPDATE metadata SET value = '1' WHERE key = 'schema_version'")
     assert QueueStore(tmp_path).history(server_id="gpu01") == [JobSummary.from_record(finished)]
     with sqlite3.connect(index_path) as connection:
         assert connection.execute(
             "SELECT value FROM metadata WHERE key = 'schema_version'"
-        ).fetchone() == ("1",)
+        ).fetchone() == (str(INDEX_SCHEMA_VERSION),)
 
 
 def test_legacy_atomic_record_replace_invalidates_warm_index(tmp_path) -> None:

@@ -25,6 +25,7 @@ def format_status_table(results: Iterable[ServerResult]) -> str:
         "ETA",
     )
     rows: list[tuple[str, ...]] = []
+    capacity_rows: list[tuple[str, ...]] = []
     for result in results:
         if not result.online or result.data is None:
             rows.append(
@@ -44,7 +45,55 @@ def format_status_table(results: Iterable[ServerResult]) -> str:
             continue
         for gpu in result.data.get("gpus", []):
             rows.extend(_gpu_rows(result.server.label, gpu))
-    return _render_table(headers, rows)
+            if capacity := gpu.get("capacity"):
+                capacity_rows.extend(_capacity_rows(result.server.label, gpu, capacity))
+    telemetry = _render_table(headers, rows)
+    if not capacity_rows:
+        return telemetry
+    return (
+        telemetry
+        + "\n\n"
+        + _render_table(
+            (
+                "SERVER",
+                "GPU",
+                "JOBS/LIMIT",
+                "TOTAL REQUEST MiB",
+                "AVAILABLE MiB",
+                "SAMPLED AT",
+                "GPUOPS RUN",
+                "MODE",
+                "REQUEST MiB",
+            ),
+            capacity_rows,
+        )
+    )
+
+
+def _capacity_rows(
+    server: str, gpu: dict[str, Any], capacity: dict[str, Any]
+) -> list[tuple[str, ...]]:
+    jobs = capacity["jobs"]
+    available = capacity["available_memory_mib"]
+    common = (
+        server,
+        str(gpu["index"]),
+        f"{len(jobs)}/{capacity['max_jobs_per_gpu']}",
+        str(sum(job["memory_mib"] for job in jobs)),
+        str(available) if available is not None else "?",
+        gpu.get("sampled_at") or "?",
+    )
+    if not jobs:
+        return [(*common, "-", "-", "-")]
+    return [
+        (
+            *(common if position == 0 else ("",) * len(common)),
+            job["run_id"],
+            "exclusive" if job["exclusive"] else "shared",
+            str(job["memory_mib"]),
+        )
+        for position, job in enumerate(jobs)
+    ]
 
 
 def format_doctor_table(results: Iterable[ServerResult]) -> str:

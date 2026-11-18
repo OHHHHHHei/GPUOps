@@ -10,12 +10,17 @@ from pathlib import Path
 
 import pytest
 
+from gpuops.config import ServerTarget
+from gpuops.core.capacity import ALLOCATED_STATUSES
 from gpuops.core.queue import QueueStore
 from gpuops.core.resources import GpuResource, ServerResourceSnapshot
 from gpuops.core.scheduler import Scheduler
 from gpuops.models import JobSpec, JobStatus
+from gpuops.monitor import ServerResult
+from gpuops.monitor.formatting import format_status_table
 from gpuops.worker import sampling
 from gpuops.worker.probe import LocalGpuProbe
+from gpuops.worker.rpc import WorkerRpc
 from gpuops.worker.sampling import AsyncGpuSampler, CachedGpuProbe
 
 NOW = datetime(2026, 9, 27, 9, 0, tzinfo=timezone.utc)
@@ -931,3 +936,75 @@ def test_gpu_failing_cuda_is_published_as_unavailable(tmp_path: Path, monkeypatc
     assert broken.memory_used_mib == 300
     assert healthy.error is None and healthy.can_allocate(0)
     assert cache["data"]["gpus"][0]["error_code"] == "gpu_cuda_unavailable"
+
+
+def test_two_shared_leases_have_consistent_status_queue_and_job_views(tmp_path, monkeypatch):
+    device = _device(0)
+    rpc = WorkerRpc(tmp_path, server_id="gpu01", clock=lambda: NOW)
+    spec = JobSpec(
+        id="infer",
+        project="test",
+        command=["infer"],
+        working_directory="/tmp",
+        resources={"host": "gpu01", "exclusive": False, "memory_mib": 11500},
+    )
+    samples = [
+        ServerResourceSnapshot.model_validate(_successful_result(device, at, "")["snapshot"])
+        for at in (NOW - timedelta(seconds=5), NOW)
+    ]
+    for run_id in ("alpha", "beta", "waiting"):
+        record = rpc.queue.enqueue(spec, run_id=run_id, now=NOW)
+        if run_id != "waiting":
+            rpc.queue.lease(
+                run_id,
+                server_id="gpu01",
+                gpu_indices=[0],
+                gpu_uuids={0: device.uuid},
+                worker_id="worker",
+                ttl=timedelta(minutes=1),
+                expected_revision=record.revision,
+                now=NOW,
+                samples=tuple(samples),
+            )
+
+    def spawn(argv, **kwargs):
+        attempt = argv[argv.index("--attempt-id") + 1]
+        path = Path(argv[argv.index("--result") + 1])
+        path.write_text(json.dumps(_successful_result(device, NOW, attempt)))
+        return _FakeProcess(0)
+
+    monkeypatch.setattr(sampling.subprocess, "Popen", spawn)
+    sampler = AsyncGpuSampler(
+        tmp_path,
+        "gpu01",
+        clock=lambda: NOW,
+        device_discovery=lambda: [device],
+        active_jobs=lambda: rpc.queue.list(set(ALLOCATED_STATUSES)),
+        max_jobs_per_gpu=3,
+    )
+    sampler.tick()
+    sampler.tick()
+    cache = json.loads(sampler.cache_path.read_text())
+    assert cache["snapshot"]["max_jobs_per_gpu"] == cache["data"]["max_jobs_per_gpu"] == 3
+    card = cache["data"]["gpus"][0]
+    jobs = [
+        {"run_id": run_id, "exclusive": False, "memory_mib": 11500} for run_id in ("alpha", "beta")
+    ]
+    assert card["capacity"] == {
+        "available_memory_mib": 24576 - 300 - 23000,
+        "max_jobs_per_gpu": 3,
+        "jobs": jobs,
+    }
+    view = ServerResult(ServerTarget("gpu01", "GPU 01", "gpu01"), online=True, data=cache["data"])
+    table = format_status_table([view])
+    assert all(value in table for value in ["alpha", "beta", "11500", "23000", "2/3", "shared"])
+    rows = {row["run_id"]: row for row in rpc.list({"summary": True})["jobs"]}
+    assert rows["waiting"]["allocated_gpus"] == [] and rows["waiting"]["requested_gpus"] is None
+    for job in jobs:
+        row = rows[job["run_id"]]
+        assert row["allocated_gpus"] == [0] and row["gpu_uuids"] == {"0": device.uuid}
+        assert {key: row[key] for key in job} == job
+        shown = rpc.show({"run_id": row["run_id"], "explain": True})
+        assert shown["explanation"]["details"]["gpus"] == [
+            {"allocated_index": 0, "uuid": device.uuid, "jobs": jobs}
+        ]

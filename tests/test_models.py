@@ -74,9 +74,10 @@ def test_count_only_gpu_request_keeps_the_concrete_default() -> None:
     assert request.model_dump()["gpu_count"] == 1
 
 
-def test_shared_gpu_request_is_rejected_until_supported() -> None:
-    with pytest.raises(ValidationError, match="shared GPU scheduling is not supported"):
-        ResourceRequest(exclusive=False)
+def test_shared_gpu_request_reserves_positive_memory_per_gpu() -> None:
+    assert ResourceRequest(exclusive=False, memory_mib=11500).memory_mib == 11500
+    with pytest.raises(ValidationError, match="positive memory_mib"):
+        ResourceRequest(exclusive=False, memory_mib=0)
 
 
 def test_resource_request_defaults_to_minimum_free_memory_headroom() -> None:

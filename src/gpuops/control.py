@@ -16,8 +16,8 @@ from pathlib import Path
 from typing import Protocol
 
 from gpuops.contracts import RunId, is_valid_run_id
+from gpuops.core.capacity import gpu_capacity
 from gpuops.core.resources import ServerResourceSnapshot
-from gpuops.core.scheduling import reserved_gpu_indices
 from gpuops.file_io import atomic_write_bytes
 from gpuops.models import (
     JobRecord,
@@ -438,7 +438,7 @@ class ControlClient:
             ):
                 errors.append(f"{target.server_id}: snapshot is unhealthy or stale")
                 continue
-            evaluation = _evaluate_host(target, inspected, spec, now)
+            evaluation = _evaluate_host(target, inspected, spec, now, self.max_snapshot_age_seconds)
             if evaluation is None:
                 errors.append(f"{target.server_id}: requested GPU shape is unsupported")
                 continue
@@ -625,6 +625,7 @@ def _evaluate_host(
     state: RemoteHostState,
     spec: JobSpec,
     now: datetime,
+    max_snapshot_age_seconds: float,
 ) -> HostEvaluation | None:
     request = spec.resources
     gpu_by_index = state.snapshot.by_index()
@@ -645,13 +646,18 @@ def _evaluate_host(
         if len(candidate_gpus) < request.gpu_count:
             return None
 
-    reserved = reserved_gpu_indices(
-        state.queue, state.snapshot.gpus, server_id=target.server_id, now=now
-    )
+    fresh_gpus = state.snapshot.with_fresh_gpus(now, max_snapshot_age_seconds).by_index()
     available = [
         gpu
         for gpu in candidate_gpus
-        if gpu.index not in reserved and gpu.can_allocate(request.memory_mib)
+        if gpu_capacity(
+            fresh_gpus[gpu.index],
+            state.queue,
+            server_id=target.server_id,
+            now=now,
+            max_jobs_per_gpu=state.snapshot.max_jobs_per_gpu,
+        ).blocker(request)
+        is None
     ]
     queued_gpu_demand = sum(
         record.spec.resources.gpu_count

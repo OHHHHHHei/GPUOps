@@ -12,7 +12,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from gpuops import __version__
-from gpuops.config import MONITOR_TIMEOUT_SECONDS
+from gpuops.config import DEFAULT_MAX_JOBS_PER_GPU, MONITOR_TIMEOUT_SECONDS
 from gpuops.control import DefinitiveRemoteSubmissionError, RemoteHostState, RemoteTarget
 from gpuops.core.resources import (
     DEFAULT_RESOURCE_ELIGIBILITY_POLICY,
@@ -394,6 +394,7 @@ def _resource_snapshot(server_id: str, payload: dict[str, Any]) -> ServerResourc
         telemetry = telemetry_from_mapping(value)
         eligibility = DEFAULT_RESOURCE_ELIGIBILITY_POLICY.classify(telemetry)
         index = int(value["index"])
+        error = value.get("error") or value.get("error_code")
         gpus.append(
             GpuResource(
                 index=index,
@@ -405,12 +406,16 @@ def _resource_snapshot(server_id: str, payload: dict[str, Any]) -> ServerResourc
                 memory_used_mib=telemetry.memory_used_mib,
                 utilization_percent=telemetry.utilization_percent,
                 process_count=telemetry.process_count,
-                idle=eligibility.value == "idle",
+                idle=value.get("idle", eligibility.value == "idle"),
+                sampled_at=value.get("sampled_at") if not error else None,
+                error=error,
+                group_memory=value.get("group_memory", []),
             )
         )
     return ServerResourceSnapshot(
         server_id=server_id,
         sampled_at=sampled_at,
+        max_jobs_per_gpu=payload.get("max_jobs_per_gpu", DEFAULT_MAX_JOBS_PER_GPU),
         healthy=bool(gpus),
         error=None if gpus else "collector reported no GPUs",
         gpus=gpus,

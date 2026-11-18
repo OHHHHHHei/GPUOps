@@ -3,6 +3,15 @@
 Changes are recorded here by release. See [release validation](docs/VALIDATION.md)
 for tested behavior and limits.
 
+## 0.5.0 — Unreleased
+
+- Allow jobs to share a GPU with `resources.exclusive: false`. The Worker
+  reserves each job's per-card `memory_mib`, accounts for external usage, and
+  defaults to two managed jobs per GPU. Status, queue, and job queries show
+  the allocations and per-job requests.
+- Upgrade the controller and Workers together. Older versions cannot read job
+  records containing `exclusive: false`, including records for finished jobs.
+
 ## 0.4.0 — Unreleased
 
 - Sample each GPU every five seconds as designed (it had slipped to ten) with

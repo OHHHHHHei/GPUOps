@@ -8,7 +8,7 @@ permissions; GPUOps does not sandbox untrusted code.
 ## Versions and compatibility
 
 Run `gpuops version --json` to inspect the installed release and interface names.
-GPUOps 0.4.0 requires the same published release on the controller, server CLI,
+GPUOps requires the same published release on the controller, server CLI,
 and running Worker. RPC requests carry `release`; a mismatch is rejected with
 `version_mismatch` without retrying an older interface. A rejected submission is
 not accepted. Upgrade through `gpuops deploy install --server ID --json`.
@@ -20,7 +20,7 @@ remain `gpuops.cli/v1`, `gpuops/v1`, and `gpuops.worker.rpc/v1`; they name the
 interfaces, while the published release determines the supported contract.
 
 JSON shapes remain command-specific. Unknown manifest fields are rejected.
-This release removes `queue --all` and hidden `--host` arguments. Use `queue`
+Version 0.4.0 removed `queue --all` and hidden `--host` arguments. Use `queue`
 for active summaries, `history` for completed tasks, and `job` for one full record.
 Use `--server ID` for registered targets, including a submission override;
 `deploy --ssh-alias ALIAS` addresses an unregistered SSH host for maintenance.
@@ -264,6 +264,31 @@ controller and server-local journals are separate. A successful submission is
 not dependent on the submitting Agent remaining connected. Worker recovery
 reattaches to recorded execution; it does not automatically rerun an interrupted
 experiment from the beginning.
+
+## Shared GPU requests
+
+Manifest `resources.exclusive` defaults to `true`. Set it to `false` for jobs
+that may share every allocated GPU. `memory_mib` is per GPU and must be positive
+for a shared request. Each managed job reserves at least its requested memory
+until release. Excess observed usage and external GPU processes reduce the
+available budget. Exclusive and shared jobs cannot occupy the same GPU.
+
+- `status --json` includes `data.gpus[].capacity` with `jobs`,
+  `max_jobs_per_gpu`, and `available_memory_mib` (nullable when sample evidence
+  is insufficient). Each job has a `run_id`, `exclusive`, and per-card
+  `memory_mib`. The card's existing `memory.used` remains physical usage.
+- `queue --json` includes `exclusive`, `memory_mib`, `requested_gpus` (null for
+  automatic selection), `allocated_gpus` (empty while queued), and
+  `gpu_uuids` mapping allocated indices to physical UUIDs. Multiple rows may
+  refer to the same physical device.
+- On a job holding GPUs, `job RUN_ID --json` lists its cards under
+  `explanation.details.gpus[]` with `allocated_index`, `uuid`, and current
+  `jobs` (run ID, exclusivity, per-card request). Finished jobs retain their own
+  recorded allocation.
+- A queued `job RUN_ID --json` can report `gpu_job_limit_reached`,
+  `insufficient_free_memory`, `gpu_occupied`, or `unknown`.
+  `explanation.details.blocked_gpus` identifies observed per-card blockers,
+  jobs, budgets, and slot limits when available.
 
 ## Resource and trust boundary
 

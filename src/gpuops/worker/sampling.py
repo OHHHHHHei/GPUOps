@@ -107,6 +107,7 @@ class AsyncGpuSampler:
         monotonic_clock: Callable[[], float] = time.monotonic,
         clock: Callable[[], datetime] = utc_now,
         device_discovery: Callable[[], list[GpuDevice]] = discover_devices,
+        gpu_unavailable: Callable[[str], str | None] | None = None,
     ) -> None:
         if not server_id.strip():
             raise ValueError("server_id cannot be empty")
@@ -116,6 +117,8 @@ class AsyncGpuSampler:
         self.monotonic_clock = monotonic_clock
         self.clock = clock
         self.device_discovery = device_discovery
+        # Reports a CUDA failure found when the scheduler last tried this GPU.
+        self.gpu_unavailable = gpu_unavailable
         self._devices: dict[str, _DeviceState] = {}
         self._retired_processes: list[subprocess.Popen[bytes]] = []
         self._next_discovery_at = 0.0
@@ -393,13 +396,20 @@ class AsyncGpuSampler:
             if latest is not None and latest.get("error_code") is None:
                 sample = ServerResourceSnapshot.model_validate(latest["snapshot"])
                 gpu = sample.gpus[0]
+                cuda_error = (
+                    self.gpu_unavailable(gpu.uuid) if self.gpu_unavailable is not None else None
+                )
+                if cuda_error is not None:
+                    # Keep the telemetry, but show status, job explanations and host
+                    # selection that the scheduler skips this card until it is rechecked.
+                    gpu = gpu.model_copy(update={"idle": False, "error": cuda_error})
                 gpus.append(gpu)
                 raw_gpu = dict(latest["data"]["gpus"][0])
                 raw_gpu.update(
                     {
                         "sampled_at": gpu.sampled_at.isoformat() if gpu.sampled_at else None,
-                        "error": None,
-                        "error_code": None,
+                        "error": cuda_error,
+                        "error_code": None if cuda_error is None else "gpu_cuda_unavailable",
                     }
                 )
                 raw_gpus.append(raw_gpu)

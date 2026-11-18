@@ -114,6 +114,8 @@ def build_worker_runtime(
     )
     store = QueueStore(state / "queue", storage=storage)
     cached_probe = CachedGpuProbe(state, server_id)
+    # One checker serves the scheduler and the published GPU sample.
+    cuda_readiness = CudaReadiness()
     scheduler = Scheduler(
         store,
         cached_probe,
@@ -121,7 +123,7 @@ def build_worker_runtime(
         worker_id=worker_id,
         settings=SchedulerSettings(),
         confirmation_provider=cached_probe,
-        gpu_ready=CudaReadiness(),
+        gpu_ready=cuda_readiness,
     )
     supervisor = DurableJobSupervisor(state / "runs", storage=storage)
     worker = Worker(store, scheduler, DurableSupervisorLauncher(supervisor))
@@ -131,7 +133,9 @@ def build_worker_runtime(
         paths=RuntimePaths.from_state_directory(state),
         tick=worker.tick,
         interval_seconds=interval_seconds,
-        sampler_factory=lambda: AsyncGpuSampler(state, server_id),
+        sampler_factory=lambda: AsyncGpuSampler(
+            state, server_id, gpu_unavailable=cuda_readiness.unavailable
+        ),
         notifier_factory=lambda: JobNotifier(store, server_id, state),
     )
 

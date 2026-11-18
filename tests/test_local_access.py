@@ -414,6 +414,19 @@ def test_reconcile_keeps_frozen_peer_target_accessible(tmp_path, monkeypatch, ca
     assert calls == [("get", "gpu02"), ("submit", "gpu02")]
 
 
+def test_submit_without_a_server_registry_is_not_accepted(tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "home"))
+    monkeypatch.setattr("gpuops.config.registry_path", lambda: tmp_path / "missing.json")
+    manifest = tmp_path / "job.json"
+    manifest.write_text(_spec("auto").model_dump_json(), encoding="utf-8")
+
+    assert main(["submit", str(manifest), "--json"]) == 1
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["submission_state"] == "not_accepted"
+    assert "recovery_command" not in payload
+
+
 @pytest.mark.parametrize("installed_server", [True, False])
 def test_reconcile_works_without_a_server_registry(
     tmp_path, monkeypatch, capsys, installed_server

@@ -7,10 +7,18 @@ from gpuops.worker.cuda_readiness import CudaReadiness
 GPU = SimpleNamespace(index=0, uuid="GPU-0")
 
 
+class Pipe:
+    closed = False
+
+    def close(self):
+        self.closed = True
+
+
 class Process:
     def __init__(self, *, stdout="", stderr="", code=0, hang=False):
-        self.stdout = stdout
-        self.stderr = stderr
+        self.output = (stdout, stderr)
+        self.stdout = Pipe()
+        self.stderr = Pipe()
         self.returncode = None if hang else code
         self.hang = hang
         self.killed = False
@@ -18,7 +26,7 @@ class Process:
     def communicate(self, timeout):
         if self.hang:
             raise subprocess.TimeoutExpired("cuda_check", timeout)
-        return self.stdout, self.stderr
+        return self.output
 
     def kill(self):
         self.killed = True
@@ -74,10 +82,21 @@ def test_stuck_check_is_not_repeated_while_it_is_alive():
     check, now, launched = readiness(stuck, Process(stdout="GPU-0\n"))
 
     assert not check(GPU)
-    assert stuck.killed
+    assert stuck.killed and stuck.stdout.closed and stuck.stderr.closed
     now[0] = 1000
     assert not check(GPU)
     assert len(launched) == 1
     stuck.returncode = -9
     assert check(GPU)
     assert len(launched) == 2
+
+
+def test_failed_gpu_is_reported_until_its_retry_is_due():
+    check, now, _launched = readiness(Process(code=1, stderr="cuInit failed"))
+
+    assert check.unavailable(GPU.uuid) is None
+    assert not check(GPU)
+    assert check.unavailable(GPU.uuid) == "CUDA unavailable: cuInit failed"
+    now[0] = 61
+    # The scheduler may select and recheck the GPU once its retry is due.
+    assert check.unavailable(GPU.uuid) is None

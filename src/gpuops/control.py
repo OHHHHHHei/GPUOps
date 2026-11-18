@@ -408,7 +408,7 @@ class ControlClient:
         # Reconciliation reuses each journal entry's frozen target; only new
         # submissions need a registered server.
         if not self.targets:
-            raise ValueError("at least one remote target is required")
+            raise HostSelectionError("no registered server can accept this job")
         requested_host = spec.resources.host
         if requested_host != "auto":
             try:

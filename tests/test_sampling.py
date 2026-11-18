@@ -895,3 +895,39 @@ def test_failure_backoff_is_bounded_at_sixty_seconds(tmp_path: Path, monkeypatch
         sampler.tick()
     assert state.failure_backoff == 60
     assert state.next_attempt_at - monotonic[0] <= 60
+
+
+def test_gpu_failing_cuda_is_published_as_unavailable(tmp_path: Path, monkeypatch) -> None:
+    devices = [_device(0), _device(1)]
+
+    def spawn(argv, **kwargs):
+        del kwargs
+        attempt = argv[argv.index("--attempt-id") + 1]
+        index = int(argv[argv.index("--index") + 1])
+        path = Path(argv[argv.index("--result") + 1])
+        path.write_text(
+            json.dumps(_successful_result(devices[index], NOW, attempt)), encoding="utf-8"
+        )
+        return _FakeProcess(0)
+
+    monkeypatch.setattr(sampling.subprocess, "Popen", spawn)
+    monotonic = [0.0]
+    sampler = AsyncGpuSampler(
+        tmp_path,
+        "gpu01",
+        monotonic_clock=lambda: monotonic[0],
+        clock=lambda: NOW,
+        device_discovery=lambda: devices,
+        gpu_unavailable=lambda uuid: "CUDA unavailable: cuInit failed" if uuid == "GPU-0" else None,
+    )
+    sampler.tick()
+    monotonic[0] = 0.1
+    sampler.tick()
+
+    cache = json.loads((tmp_path / sampling.CACHE_NAME).read_text())
+    broken, healthy = ServerResourceSnapshot.model_validate(cache["snapshot"]).gpus
+    assert broken.error == "CUDA unavailable: cuInit failed"
+    assert not broken.can_allocate(0)
+    assert broken.memory_used_mib == 300
+    assert healthy.error is None and healthy.can_allocate(0)
+    assert cache["data"]["gpus"][0]["error_code"] == "gpu_cuda_unavailable"

@@ -18,7 +18,9 @@ from typing import Protocol
 
 logger = logging.getLogger(__name__)
 
-CHECK_TIMEOUT_SECONDS = 10.0
+# Healthy checks finish in well under a second; eight stuck cards stay below
+# the Worker's 75-second heartbeat limit.
+CHECK_TIMEOUT_SECONDS = 5.0
 READY_CACHE_SECONDS = 300.0
 FAILURE_BACKOFF_INITIAL_SECONDS = 60.0
 FAILURE_BACKOFF_MAX_SECONDS = 300.0
@@ -46,6 +48,7 @@ class CudaReadiness:
         self._ready_until: dict[str, float] = {}
         self._retry_at: dict[str, float] = {}
         self._backoff: dict[str, float] = {}
+        self._errors: dict[str, str] = {}
         # A check stuck in the driver cannot be reaped; keep it so the same GPU
         # never accumulates more than one such process.
         self._stuck: dict[str, subprocess.Popen[str]] = {}
@@ -67,7 +70,9 @@ class CudaReadiness:
             self._ready_until[uuid] = self.monotonic_clock() + READY_CACHE_SECONDS
             self._retry_at.pop(uuid, None)
             self._backoff.pop(uuid, None)
+            self._errors.pop(uuid, None)
             return True
+        self._errors[uuid] = f"CUDA unavailable: {error}"
         backoff = min(
             self._backoff.get(uuid, FAILURE_BACKOFF_INITIAL_SECONDS / 2) * 2,
             FAILURE_BACKOFF_MAX_SECONDS,
@@ -85,6 +90,7 @@ class CudaReadiness:
             process = self.popen(
                 [sys.executable, "-m", "gpuops.worker.cuda_check", uuid],
                 env=environment,
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -95,10 +101,27 @@ class CudaReadiness:
             stdout, stderr = process.communicate(timeout=self.timeout_seconds)
         except subprocess.TimeoutExpired:
             process.kill()
+            # A process stuck in the driver may never exit; do not keep its pipes open.
+            for stream in (process.stdout, process.stderr):
+                if stream is not None:
+                    stream.close()
             self._stuck[uuid] = process
             return "CUDA check timed out"
         if process.returncode != 0:
             return (stderr or stdout or "CUDA check failed").strip()[:300]
         if stdout.strip() != uuid:
             return "CUDA returned a different device identity"
+        return None
+
+    def unavailable(self, uuid: str) -> str | None:
+        """Return the CUDA error while a failed GPU waits for its next check.
+
+        The mark ends when the retry is due, so the scheduler can select and
+        check the GPU again instead of excluding it permanently.
+        """
+        stuck = self._stuck.get(uuid)
+        if stuck is not None and stuck.poll() is None:
+            return self._errors.get(uuid)
+        if self._retry_at.get(uuid, 0.0) > self.monotonic_clock():
+            return self._errors.get(uuid)
         return None

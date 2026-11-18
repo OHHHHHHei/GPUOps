@@ -118,6 +118,15 @@ class Scheduler:
             selected = self._select_ready(record, first, second, available, confirmed)
             if selected is None:
                 continue
+            if self.gpu_ready is not None:
+                # CUDA checks can take seconds; lease only with still-fresh evidence.
+                lease_now = self.clock()
+                if not self._usable(second, lease_now):
+                    break
+                if not self._is_candidate(record, lease_now) or not set(selected).issubset(
+                    self._confirmed_devices(first, second, lease_now)
+                ):
+                    continue
             try:
                 leased = self.store.lease(
                     record.run_id,

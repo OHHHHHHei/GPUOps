@@ -328,6 +328,30 @@ def test_gpu_failing_cuda_check_is_skipped_before_leasing(tmp_path) -> None:
     ]
 
 
+def test_slow_cuda_check_does_not_lease_on_stale_evidence(tmp_path) -> None:
+    store = QueueStore(tmp_path)
+    queued = store.enqueue(job("slow-cuda"), now=NOW)
+    probe = Probe(snapshot(gpu(0)), snapshot(gpu(0)))
+    now = [NOW]
+
+    def gpu_ready(_resource: GpuResource) -> bool:
+        now[0] = NOW + timedelta(seconds=20)
+        return True
+
+    decisions = Scheduler(
+        store,
+        probe,
+        server_id="gpu01",
+        worker_id="worker-1",
+        settings=SchedulerSettings(idle_confirmation_delay_seconds=0),
+        clock=lambda: now[0],
+        gpu_ready=gpu_ready,
+    ).tick()
+
+    assert decisions == []
+    assert store.get(queued.run_id).status == JobStatus.QUEUED
+
+
 def test_no_cuda_check_without_a_waiting_job(tmp_path) -> None:
     store = QueueStore(tmp_path)
     probe = Probe(snapshot(gpu(0)), snapshot(gpu(0)))

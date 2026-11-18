@@ -13,7 +13,9 @@ from pydantic import (
     ConfigDict,
     Field,
     PlainSerializer,
+    SerializerFunctionWrapHandler,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -258,6 +260,16 @@ class LaunchInfo(StrictModel):
     pid: int = Field(gt=0)
     started_at: datetime
     external_id: str | None = None
+    start_ticks: int | None = Field(default=None, ge=0)
+    boot_id: str | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_launch(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        if self.start_ticks is None:
+            data.pop("start_ticks", None)
+            data.pop("boot_id", None)
+        return data
 
 
 class JobRecord(StrictModel):

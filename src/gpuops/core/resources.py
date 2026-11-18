@@ -154,6 +154,15 @@ def _valid_telemetry(telemetry: GpuTelemetry) -> bool:
     )
 
 
+class GpuGroupMemory(StrictModel):
+    """GPU memory observed for members of one process group on this card."""
+
+    pgid: int = Field(gt=0)
+    leader_start_ticks: int = Field(ge=0)
+    boot_id: str
+    memory_mib: int = Field(ge=0)
+
+
 class GpuResource(StrictModel):
     index: int = Field(ge=0)
     uuid: str
@@ -162,6 +171,7 @@ class GpuResource(StrictModel):
     utilization_percent: float | None = Field(default=None, ge=0, le=100)
     process_count: int | None = Field(default=None, ge=0)
     idle: bool
+    group_memory: list[GpuGroupMemory] = Field(default_factory=list)
     sampled_at: datetime | None = None
     error: str | None = None
 
@@ -207,6 +217,7 @@ class ServerResourceSnapshot(StrictModel):
     healthy: bool = True
     error: str | None = None
     gpus: list[GpuResource] = Field(default_factory=list)
+    max_jobs_per_gpu: int = Field(default=2, ge=1)
 
     @field_validator("sampled_at")
     @classmethod
@@ -249,6 +260,7 @@ class ServerResourceSnapshot(StrictModel):
                         "memory_used_mib": None,
                         "utilization_percent": None,
                         "process_count": None,
+                        "group_memory": [],
                         "error": gpu.error or "GPU sample is stale; waiting for a new sample",
                     }
                 )

@@ -29,6 +29,7 @@ from gpuops.gpu_policy import (
     validate_idle_limits,
 )
 from gpuops.worker.devices import GpuDevice
+from gpuops.worker.process_identity import read_process_identity
 
 if TYPE_CHECKING:
     from gpuops.core.resources import ServerResourceSnapshot
@@ -115,6 +116,7 @@ class LocalGpuProbe:
         idle_memory_baseline_mib: int = DEFAULT_IDLE_MEMORY_BASELINE_MIB,
         idle_memory_tolerance_mib: int = DEFAULT_IDLE_MEMORY_TOLERANCE_MIB,
         pci_checker: Callable[[GpuDevice], None] | None = None,
+        proc_root: Path = Path("/proc"),
     ):
         if not server_id.strip():
             raise ValueError("server_id cannot be empty")
@@ -123,6 +125,7 @@ class LocalGpuProbe:
         validate_idle_limits(
             idle_utilization_threshold, idle_memory_baseline_mib, idle_memory_tolerance_mib
         )
+        self.proc_root = proc_root
         self.server_id = server_id
         self.runner = runner
         self.clock = clock
@@ -173,6 +176,21 @@ class LocalGpuProbe:
     def _snapshot_from_nvidia_device(
         self, device: GpuDevice, deadline: float
     ) -> tuple[dict[str, Any], dict[str, Any]]:
+        # Read the processes first: while models load, an earlier managed-memory
+        # observation leaves more of their reservation charged against the card.
+        process_result = self._run(
+            [
+                "nvidia-smi",
+                "-i",
+                device.pci_bus,
+                "--query-compute-apps=gpu_uuid,pid,used_gpu_memory",
+                "--format=csv,noheader,nounits",
+            ],
+            deadline,
+        )
+        processes = self._processes_on_device(device.uuid, process_result.stdout)
+        group_memory = self._group_memory(processes)
+        process_count = len(processes)
         gpu_result = self._run(
             [
                 "nvidia-smi",
@@ -211,21 +229,6 @@ class LocalGpuProbe:
         if utilization_value > 100:
             raise ProbeCommandError("utilization.gpu cannot exceed 100")
 
-        process_result = self._run(
-            [
-                "nvidia-smi",
-                "-i",
-                device.pci_bus,
-                "--query-compute-apps=gpu_uuid,pid",
-                "--format=csv,noheader,nounits",
-            ],
-            deadline,
-        )
-        process_pids = self._parse_process_pids(process_result.stdout)
-        if set(process_pids).difference({device.uuid}):
-            raise ProbeCommandError("process query referenced a foreign GPU")
-        processes = [self._process_payload(pid) for pid in process_pids.get(device.uuid, [])]
-        process_count = len(processes)
         sampled_at = self.clock()
         gpu = {
             "index": device.index,
@@ -234,6 +237,7 @@ class LocalGpuProbe:
             "memory_used_mib": memory_used_mib,
             "utilization_percent": utilization_value,
             "process_count": process_count,
+            "group_memory": group_memory,
             "idle": self._is_idle(process_count, utilization_value, memory_used_mib),
             "sampled_at": sampled_at,
         }
@@ -299,24 +303,50 @@ class LocalGpuProbe:
         if self.monotonic_clock() >= deadline:
             raise ProbeBudgetExhausted("sampling deadline exhausted")
 
-    @staticmethod
-    def _parse_process_pids(output: str) -> dict[str, list[int]]:
-        processes: dict[str, list[int]] = {}
+    def _processes_on_device(self, uuid: str, output: str) -> list[dict[str, Any]]:
+        processes: dict[int, dict[str, Any]] = {}
         for row in csv.reader(StringIO(output)):
             if not row or all(not value.strip() for value in row):
                 continue
-            if len(row) != 2:
+            if len(row) != 3:
                 raise ProbeCommandError("returned an invalid process CSV row")
-            uuid, pid = (value.strip() for value in row)
-            if not uuid or not pid.isdigit():
-                raise ProbeCommandError("returned an invalid process entry")
-            processes.setdefault(uuid, []).append(int(pid))
-        return processes
+            gpu_uuid, pid_text, memory = (value.strip() for value in row)
+            if gpu_uuid != uuid:
+                raise ProbeCommandError("process query referenced a foreign GPU")
+            if not pid_text.isdigit():
+                raise ProbeCommandError("returned an invalid process PID")
+            pid = int(pid_text)
+            if pid in processes:
+                continue
+            process: dict[str, Any] = {
+                "pid": pid,
+                "command": "",
+                "gpu_memory_usage": int(memory) if memory.isdigit() else None,
+            }
+            self._enrich_process(process, self.proc_root)
+            processes[pid] = process
+        return list(processes.values())
 
-    def _process_payload(self, pid: int) -> dict[str, Any]:
-        process: dict[str, Any] = {"pid": pid, "command": ""}
-        self._enrich_process(process)
-        return process
+    def _group_memory(self, processes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        totals: dict[int, int] = {}
+        for process in processes:
+            pgid, memory = process["pgrp"], process["gpu_memory_usage"]
+            if pgid is not None and memory is not None:
+                totals[pgid] = totals.get(pgid, 0) + memory
+
+        groups = []
+        for pgid, memory in totals.items():
+            leader = read_process_identity(pgid, proc_root=self.proc_root)
+            if leader and leader.pgid == pgid and leader.boot_id and leader.start_ticks is not None:
+                groups.append(
+                    {
+                        "pgid": pgid,
+                        "leader_start_ticks": leader.start_ticks,
+                        "boot_id": leader.boot_id,
+                        "memory_mib": memory,
+                    }
+                )
+        return groups
 
     @staticmethod
     def _enrich_process(process: dict[str, Any], proc_root: Path = Path("/proc")) -> None:

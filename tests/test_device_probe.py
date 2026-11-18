@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -56,10 +57,28 @@ def test_sample_device_uses_only_scoped_queries_and_returns_one_gpu() -> None:
     assert sample.data["gpus"][0]["power.draw"] == 58.5
     assert sample.data["gpus"][0]["power.limit"] == 250
     assert all(call[:3] == ["nvidia-smi", "-i", DEVICE.pci_bus] for call in calls)
-    assert not any(call[0] == "gpustat" for call in calls)
+    assert len(calls) == 2
+    assert calls[0][3] == "--query-compute-apps=gpu_uuid,pid,used_gpu_memory"
+    assert calls[1][3].startswith("--query-gpu=")
 
 
-def test_sample_device_enriches_only_matching_processes() -> None:
+def test_sample_records_deduplicated_process_memory_by_leader_identity(tmp_path: Path) -> None:
+    (tmp_path / "sys/kernel/random").mkdir(parents=True)
+    (tmp_path / "sys/kernel/random/boot_id").write_text("boot-A")
+    (tmp_path / "uptime").write_text("100 0")
+    for pid, group, ticks in [
+        (123, 123, 15),
+        (456, 123, 25),
+        (500, 123, 35),
+        (770, 700, 40),  # Missing group leader.
+        (800, 800, 60),  # Another job under the same user.
+    ]:
+        directory = tmp_path / str(pid)
+        directory.mkdir()
+        (directory / "cmdline").write_bytes(b"job")
+        fields = ["S", "1", str(group)] + ["0"] * 16 + [str(ticks)]
+        (directory / "stat").write_text(f"{pid} (job) {' '.join(fields)}")
+
     def runner(command, **kwargs):
         del kwargs
         if "--query-gpu" in command[3]:
@@ -67,13 +86,30 @@ def test_sample_device_enriches_only_matching_processes() -> None:
                 command,
                 "5, GPU-ABCDE, 0000:81:00.0, 24576, 8000, 70, GPU, 45, 60, 250\n",
             )
-        return completed(command, "GPU-ABCDE, 123\nGPU-ABCDE, 456\n")
+        return completed(
+            command,
+            "GPU-ABCDE, 123, 1000\nGPU-ABCDE, 456, 2000\nGPU-ABCDE, 456, 2000\n"
+            "GPU-ABCDE, 500, N/A\nGPU-ABCDE, 770, 100\nGPU-ABCDE, 800, 300\n",
+        )
 
-    sample = device_probe("gpu01", runner=runner, clock=lambda: NOW).sample_device(DEVICE)
+    sample = device_probe(
+        "gpu01", runner=runner, clock=lambda: NOW, proc_root=tmp_path
+    ).sample_device(DEVICE)
 
-    assert sample.snapshot.gpus[0].process_count == 2
+    gpu = sample.snapshot.gpus[0]
+    assert gpu.process_count == 5
+    assert [group.model_dump() for group in gpu.group_memory] == [
+        {"pgid": 123, "leader_start_ticks": 15, "boot_id": "boot-A", "memory_mib": 3000},
+        {"pgid": 800, "leader_start_ticks": 60, "boot_id": "boot-A", "memory_mib": 300},
+    ]
     assert sample.data is not None
-    assert [process["pid"] for process in sample.data["gpus"][0]["processes"]] == [123, 456]
+    assert [p["gpu_memory_usage"] for p in sample.data["gpus"][0]["processes"]] == [
+        1000,
+        2000,
+        None,
+        100,
+        300,
+    ]
     assert all("username" in process for process in sample.data["gpus"][0]["processes"])
 
 
@@ -93,7 +129,7 @@ def test_sample_device_rejects_identity_mismatch_and_incomplete_rows(gpu_row: st
     def runner(command, **kwargs):
         del kwargs
         calls.append(command)
-        return completed(command, gpu_row)
+        return completed(command, gpu_row if "--query-gpu" in command[3] else "")
 
     sample = device_probe("gpu01", runner=runner, clock=lambda: NOW).sample_device(DEVICE)
 
@@ -101,7 +137,7 @@ def test_sample_device_rejects_identity_mismatch_and_incomplete_rows(gpu_row: st
     assert sample.snapshot.gpus == []
     assert sample.data is None
     assert sample.error_code == "gpu_query_failed"
-    assert len(calls) == 1
+    assert len(calls) == 2
 
 
 def test_sample_device_rejects_foreign_process_uuid() -> None:
@@ -112,7 +148,7 @@ def test_sample_device_rejects_foreign_process_uuid() -> None:
                 command,
                 "5, GPU-ABCDE, 00000000:81:00.0, 24576, 318, 0, GPU, 45, 60, 250\n",
             )
-        return completed(command, "GPU-FOREIGN, 123\n")
+        return completed(command, "GPU-FOREIGN, 123, 8\n")
 
     sample = device_probe("gpu01", runner=runner, clock=lambda: NOW).sample_device(DEVICE)
 
@@ -146,12 +182,12 @@ def test_sample_device_shares_deadline_across_its_two_scoped_queries() -> None:
     def runner(command, **kwargs):
         timeouts.append(kwargs["timeout"])
         if "--query-gpu" in command[3]:
-            current[0] = 12.0
+            current[0] = 13.0
             return completed(
                 command,
                 "5, GPU-ABCDE, 00000000:81:00.0, 24576, 318, 0, GPU, 45, 60, 250\n",
             )
-        current[0] = 13.0
+        current[0] = 12.0
         return completed(command, "")
 
     sample = device_probe(
@@ -260,7 +296,7 @@ def test_busy_device_skips_cuda_check() -> None:
                 command,
                 "5, GPU-ABCDE, 00000000:81:00.0, 24576, 8000, 70, GPU, 45, 60, 250\n",
             )
-        return completed(command, "GPU-ABCDE, 123\n")
+        return completed(command, "GPU-ABCDE, 123, 8000\n")
 
     sample = LocalGpuProbe(
         "gpu01", runner=runner, clock=lambda: NOW, pci_checker=lambda _device: None

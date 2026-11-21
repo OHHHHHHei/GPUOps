@@ -1050,3 +1050,22 @@ test("job details are not redrawn when only the explanation timestamp changes", 
   await app.poll();
   assert.equal(app.log(), log);
 });
+
+test("refreshing one server keeps the other GPU table's sideways scroll", async () => {
+  const app = await dashboard();
+  let lastSeen = "2026-09-20T10:00:00Z";
+  app.routes.set("/api/v1/snapshot", () => response({
+    summary: {},
+    servers: [server("gpu01"), server("gpu02", { last_seen: lastSeen })],
+  }));
+  await app.poll();
+  const scroller = (id) => app.element("server-list").children
+    .find((section) => section.dataset.serverId === id)
+    .children.find((child) => child.className === "table-scroll");
+  scroller("gpu01").scrollLeft = 260;
+
+  lastSeen = "2026-09-20T10:00:15Z";
+  await app.poll();
+  assert.equal(scroller("gpu01").scrollLeft, 260);
+  assert.ok(!scroller("gpu02").scrollLeft);
+});

@@ -415,7 +415,20 @@ function renderGpuServers(snapshot) {
     })),
   }));
   if (!changed("servers", servers)) return;
-  byId("server-list").replaceChildren(...servers.map(renderServer));
+  const list = byId("server-list");
+  // Narrow windows scroll each GPU table sideways; keep each server's position.
+  const scrollLeft = new Map(Array.from(list.children, (section) => [
+    section.dataset?.serverId,
+    Array.from(section.children || []).find((child) => child.className === "table-scroll")
+      ?.scrollLeft,
+  ]));
+  const sections = servers.map(renderServer);
+  list.replaceChildren(...sections);
+  sections.forEach((section) => {
+    const left = scrollLeft.get(section.dataset.serverId);
+    const wrap = Array.from(section.children).find((child) => child.className === "table-scroll");
+    if (wrap && left) wrap.scrollLeft = left;
+  });
 }
 
 function renderProcessEtas(payload) {

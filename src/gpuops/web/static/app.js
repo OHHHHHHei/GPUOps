@@ -110,6 +110,8 @@ const NEXT_ACTION_LABELS = {
 
 const state = {
   selectedJobId: null,
+  selectedJobServer: null,
+  renderKeys: {},
   selectedJobAutoRefresh: false,
   polls: {},
   snapshot: null,
@@ -174,6 +176,30 @@ function formatMemory(used, total) {
   return `${usedGiB} / ${totalGiB} GB`;
 }
 
+function formatMiB(value) {
+  return Number.isFinite(value) ? `${value.toLocaleString("en-US")} MiB` : "? MiB";
+}
+
+function placementMode(item) {
+  if (item.exclusive === undefined) return null;
+  return item.exclusive
+    ? `独占${item.memory_mib ? ` · 每卡 ${formatMiB(item.memory_mib)}` : ""}`
+    : `共享 · 每卡 ${formatMiB(item.memory_mib)}`;
+}
+
+// Polling returns mostly unchanged data. Skipping identical renders keeps hover
+// tooltips, text selection, keyboard focus and log scrolling intact.
+function changed(area, value) {
+  const key = JSON.stringify(value);
+  if (state.renderKeys[area] === key) return false;
+  state.renderKeys[area] = key;
+  return true;
+}
+
+function forget(area) {
+  delete state.renderKeys[area];
+}
+
 function statusPill(status) {
   return element("span", `status-pill status-${status}`, STATUS_LABELS[status] || status);
 }
@@ -207,7 +233,9 @@ function renderProcesses(gpu) {
   }
   return {
     user: processStack(gpu.processes, (process) => process.user || "unknown"),
-    pid: processStack(gpu.processes, (process) => process.pid ?? "-"),
+    pid: processStack(gpu.processes, (process) => (Number.isFinite(process.gpu_memory_mib)
+      ? `${process.pid ?? "-"} · ${(process.gpu_memory_mib / 1024).toFixed(1)} GB`
+      : process.pid ?? "-")),
     command: error || processStack(
       gpu.processes,
       (process) => process.command || "unknown",
@@ -271,6 +299,30 @@ function processStack(processes, valueFor, titleFor) {
   return stack;
 }
 
+function renderCapacity(capacity) {
+  if (!capacity?.jobs?.length) return "-";
+  const stack = element("div", "process-stack");
+  capacity.jobs.forEach((job) => {
+    const line = element(
+      "span",
+      "process-line",
+      `${job.exclusive ? "独占" : "共享"} ${formatMiB(job.memory_mib)} · ${job.run_id}`,
+    );
+    line.title = line.textContent;
+    stack.appendChild(line);
+  });
+  if (capacity.jobs.every((job) => !job.exclusive)) {
+    const available = Number.isFinite(capacity.available_memory_mib)
+      ? `可再申请 ${formatMiB(capacity.available_memory_mib)}` : "可再申请未知";
+    stack.appendChild(element(
+      "span",
+      "process-line capacity-summary",
+      `${capacity.jobs.length}/${capacity.max_jobs_per_gpu ?? "?"} · ${available}`,
+    ));
+  }
+  return stack;
+}
+
 function renderGpuRow(gpu) {
   const row = element("tr", `gpu-row gpu-${gpu.status}`);
   const process = renderProcesses(gpu);
@@ -281,13 +333,14 @@ function renderGpuRow(gpu) {
   row.appendChild(
     valueCell("显存", formatMemory(gpu.memory_used_mib, gpu.memory_total_mib), "numeric memory-cell"),
   );
+  row.appendChild(valueCell("GPUOps 作业", renderCapacity(gpu.capacity), "capacity-cell"));
   row.appendChild(valueCell("温度", Number.isFinite(gpu.temperature_c)
     ? `${gpu.temperature_c}°C` : "-", "numeric"));
   row.appendChild(valueCell("用户", process.user));
   row.appendChild(valueCell("PID", process.pid, "numeric mono"));
   row.appendChild(valueCell("命令", process.command, "command-cell mono"));
   row.appendChild(valueCell("已运行", process.elapsed, "duration-cell"));
-  row.appendChild(valueCell("训练预计结束", process.eta, "eta-cell"));
+  row.appendChild(valueCell("预计结束", process.eta, "eta-cell"));
   return row;
 }
 
@@ -333,7 +386,8 @@ function renderServer(server) {
   const table = element("table", "data-table gpu-table");
   const head = document.createElement("thead");
   const headRow = document.createElement("tr");
-  ["GPU", "状态", "利用率", "显存", "温度", "用户", "PID", "命令", "已运行", "训练预计结束"].forEach(
+  ["GPU", "状态", "利用率", "显存", "GPUOps 作业", "温度", "用户", "PID · 显存", "命令", "已运行",
+    "预计结束"].forEach(
     (label) => headRow.appendChild(element("th", "", label)),
   );
   head.appendChild(headRow);
@@ -360,7 +414,21 @@ function renderGpuServers(snapshot) {
       }),
     })),
   }));
-  byId("server-list").replaceChildren(...servers.map(renderServer));
+  if (!changed("servers", servers)) return;
+  const list = byId("server-list");
+  // Narrow windows scroll each GPU table sideways; keep each server's position.
+  const scrollLeft = new Map(Array.from(list.children, (section) => [
+    section.dataset?.serverId,
+    Array.from(section.children || []).find((child) => child.className === "table-scroll")
+      ?.scrollLeft,
+  ]));
+  const sections = servers.map(renderServer);
+  list.replaceChildren(...sections);
+  sections.forEach((section) => {
+    const left = scrollLeft.get(section.dataset.serverId);
+    const wrap = Array.from(section.children).find((child) => child.className === "table-scroll");
+    if (wrap && left) wrap.scrollLeft = left;
+  });
 }
 
 function renderProcessEtas(payload) {
@@ -386,10 +454,11 @@ function renderSnapshot(snapshot) {
   )));
 }
 
-function queueRow(item, mode) {
+function queueRow(item, queueMode) {
   const row = element("tr", "queue-row");
   row.tabIndex = 0;
   row.dataset.jobId = item.id;
+  row.dataset.server = item.server || "";
   row.setAttribute("role", "button");
   row.setAttribute("aria-label", `查看作业 ${item.name}`);
   if (state.selectedJobId === item.id) row.classList.add("is-selected");
@@ -404,8 +473,11 @@ function queueRow(item, mode) {
   const placement = item.gpus?.length
     ? `${item.server} / GPU ${item.gpus.join(", ")}`
     : `${item.server} / 待分配`;
-  row.appendChild(valueCell("服务器 / GPU", placement));
-  if (mode === "history") {
+  const placementCell = valueCell("服务器 / GPU", placement);
+  const mode = placementMode(item);
+  if (mode) placementCell.appendChild(element("span", "subdued placement-mode", mode));
+  row.appendChild(placementCell);
+  if (queueMode === "history") {
     row.appendChild(valueCell("项目", item.project, "history-project-cell"));
     row.appendChild(valueCell("优先级", item.priority));
     row.appendChild(valueCell("完成时间", formatDate(item.finished_at)));
@@ -418,7 +490,10 @@ function queueRow(item, mode) {
     row.appendChild(end);
   }
 
-  const select = () => selectJob(item.id, { autoRefresh: mode === "active" });
+  const select = () => selectJob(item.id, {
+    autoRefresh: queueMode === "active",
+    server: item.server,
+  });
   row.addEventListener("click", select);
   row.addEventListener("keydown", (event) => {
     if (event.key === "Enter" || event.key === " ") {
@@ -460,6 +535,8 @@ function renderQueuePage(queue, mode) {
     ...errors.map((message) => element("div", "error-banner", message)),
   );
   const body = byId("queue-body");
+  if (!changed("queue", [mode, state.historyProject, items])) return;
+  const focusedJob = document.activeElement?.closest?.("#queue-body .queue-row")?.dataset.jobId;
   if (!items.length) {
     const row = document.createElement("tr");
     const emptyText = mode === "history"
@@ -471,7 +548,9 @@ function renderQueuePage(queue, mode) {
     body.replaceChildren(row);
     return;
   }
-  body.replaceChildren(...items.map((item) => queueRow(item, mode)));
+  const rows = items.map((item) => queueRow(item, mode));
+  body.replaceChildren(...rows);
+  rows.find((row) => row.dataset.jobId === focusedJob)?.focus();
 }
 
 function renderQueue(queue) {
@@ -482,7 +561,9 @@ function renderQueue(queue) {
 
 function clearJobSelection() {
   state.selectedJobId = null;
+  state.selectedJobServer = null;
   state.selectedJobAutoRefresh = false;
+  forget("job");
   state.detailRequestId += 1;
   state.pendingDetailJobId = null;
   byId("job-detail").replaceChildren(
@@ -524,6 +605,7 @@ function updateHistoryControls() {
 }
 
 function renderHistoryLoading() {
+  forget("queue");
   renderQueueHead("history");
   byId("queue-time").textContent = "正在读取历史记录...";
   byId("queue-errors").replaceChildren();
@@ -561,6 +643,7 @@ async function loadHistory({
       state.historyPage = null;
       state.historyCursor = null;
       state.historyPreviousCursors = [];
+      forget("queue");
       const row = document.createElement("tr");
       const cell = valueCell("", "历史记录暂时不可用", "empty-state");
       cell.colSpan = 6;
@@ -634,6 +717,52 @@ function formatJobEta(job) {
   return job.eta ? formatProcessEta(job) : formatDate(job.estimated_end);
 }
 
+function jobDetailLines(job) {
+  const lines = [
+    ["项目", job.project],
+    ["服务器", job.server],
+    ["GPU", job.gpus?.length ? job.gpus.join(", ") : "待分配"],
+  ];
+  const mode = placementMode(job);
+  if (mode) lines.push(["调度方式", mode]);
+  const peers = (job.explanation?.details?.gpus || [])
+    .map((card) => ({
+      index: card.allocated_index,
+      others: (card.jobs || []).filter((peer) => peer.run_id !== job.id),
+    }))
+    .filter((card) => card.others.length)
+    .map((card) => `GPU ${card.index}：${card.others.map((peer) => `${peer.run_id}（${
+      peer.exclusive ? "独占" : "共享"} ${formatMiB(peer.memory_mib)}）`).join("、")}`);
+  if (peers.length) lines.push(["同卡作业", peers.join("\n"), "wrap-anywhere"]);
+  lines.push(["工作目录", job.working_directory, "mono wrap-anywhere"]);
+  lines.push(["命令", job.command, "mono wrap-anywhere"]);
+  lines.push(job.finished_at
+    ? ["完成时间", formatDate(job.finished_at)]
+    : [job.eta?.scope === "phase" ? "阶段预计结束" : "预计结束", formatJobEta(job)]);
+  if (!job.finished_at && job.eta) {
+    const progress = formatStructuredProgress(job.eta);
+    if (progress) lines.push(["阶段进度", progress]);
+    const source = job.eta.format === "gpuops_progress"
+      ? "GPUOps 结构化日志"
+      : { logs: "日志进度", submitted: "提交时长" }[job.eta.source_kind];
+    if (source) lines.push(["估计来源", source]);
+    lines.push(["估计依据", processEtaDetails(job), "wrap-anywhere"]);
+  }
+  if (job.explanation?.message) {
+    lines.push([job.explanation.waiting ? "等待原因" : "状态说明", job.explanation.message]);
+  }
+  if (job.explanation?.next_action) {
+    lines.push([
+      "建议操作",
+      NEXT_ACTION_LABELS[job.explanation.next_action] || job.explanation.next_action,
+    ]);
+  }
+  if (job.failure_reason && !job.explanation?.details?.failure_reason) {
+    lines.push(["失败原因", job.failure_reason]);
+  }
+  return lines;
+}
+
 function renderJob(job) {
   if (state.selectedJobId === job.id) {
     state.selectedJobAutoRefresh = DETAIL_POLLING_STATES.has(job.raw_state);
@@ -642,16 +771,36 @@ function renderJob(job) {
     state.cancellingJobIds.delete(job.id);
     state.cancellationErrors.delete(job.id);
   }
+  // Compare only what is shown: Workers stamp each explanation with a new
+  // observed_at, which must not redraw an otherwise unchanged panel.
+  const status = job.raw_state === "cancel_requested" ? "cancel_requested" : job.state;
+  const cancellable = CANCELLABLE_STATES.has(job.raw_state);
+  const cancelling = state.cancellingJobIds.has(job.id);
+  const lines = jobDetailLines(job);
+  const logText = job.logs?.join("\n") || "暂无日志";
+  const errors = [
+    job.log_error && `无法读取日志：${job.log_error}`,
+    job.detail_error && `无法刷新作业说明：${job.detail_error}`,
+  ].filter(Boolean);
+  const cancelError = state.cancellationErrors.get(job.id);
+  if (!changed("job", [
+    job.id, job.name, status, cancellable, cancelling, lines, logText, errors, cancelError,
+  ])) return;
+
   const detail = byId("job-detail");
+  const previousLog = detail.querySelector(".log-output");
+  // Follow new output only when the reader was already at the bottom.
+  const followLog = !previousLog || previousLog.dataset.jobId !== job.id
+    || previousLog.scrollHeight - previousLog.scrollTop - previousLog.clientHeight < 24;
+  const previousScroll = previousLog?.scrollTop;
   const header = element("div", "job-detail-header");
   const titleBlock = document.createElement("div");
   titleBlock.appendChild(element("h3", "", job.name));
   titleBlock.appendChild(element("span", "subdued mono", job.id));
   header.appendChild(titleBlock);
   const actions = element("div", "job-actions");
-  actions.appendChild(statusPill(job.raw_state === "cancel_requested" ? "cancel_requested" : job.state));
-  if (CANCELLABLE_STATES.has(job.raw_state)) {
-    const cancelling = state.cancellingJobIds.has(job.id);
+  actions.appendChild(statusPill(status));
+  if (cancellable) {
     const cancelButton = element("button", "danger-button", cancelling ? "正在取消..." : "取消作业");
     cancelButton.type = "button";
     cancelButton.disabled = cancelling;
@@ -661,55 +810,21 @@ function renderJob(job) {
   header.appendChild(actions);
 
   const definitions = element("dl", "job-definitions");
-  definitions.appendChild(detailLine("项目", job.project));
-  definitions.appendChild(detailLine("服务器", job.server));
-  definitions.appendChild(
-    detailLine("GPU", job.gpus?.length ? job.gpus.join(", ") : "待分配"),
-  );
-  definitions.appendChild(detailLine("工作目录", job.working_directory, "mono wrap-anywhere"));
-  definitions.appendChild(detailLine("命令", job.command, "mono wrap-anywhere"));
-  definitions.appendChild(job.finished_at
-    ? detailLine("完成时间", formatDate(job.finished_at))
-    : detailLine(job.eta?.scope === "phase" ? "阶段预计结束" : "预计结束", formatJobEta(job)));
-  if (!job.finished_at && job.eta) {
-    const progress = formatStructuredProgress(job.eta);
-    if (progress) definitions.appendChild(detailLine("阶段进度", progress));
-    const source = job.eta.format === "gpuops_progress"
-      ? "GPUOps 结构化日志"
-      : { logs: "日志进度", submitted: "提交时长" }[job.eta.source_kind];
-    if (source) definitions.appendChild(detailLine("估计来源", source));
-    definitions.appendChild(detailLine("估计依据", processEtaDetails(job), "wrap-anywhere"));
-  }
-  if (job.explanation?.message) {
-    definitions.appendChild(detailLine(
-      job.explanation.waiting ? "等待原因" : "状态说明",
-      job.explanation.message,
-    ));
-  }
-  if (job.explanation?.next_action) {
-    const nextAction = NEXT_ACTION_LABELS[job.explanation.next_action] || job.explanation.next_action;
-    definitions.appendChild(detailLine("建议操作", nextAction));
-  }
-  if (job.failure_reason && !job.explanation?.details?.failure_reason) {
-    definitions.appendChild(detailLine("失败原因", job.failure_reason));
-  }
+  lines.forEach(([label, value, className]) => {
+    definitions.appendChild(detailLine(label, value, className));
+  });
 
   const logHeading = element("div", "log-heading");
   logHeading.appendChild(element("h4", "", "最近日志"));
   logHeading.appendChild(element("span", "subdued", `${job.logs?.length || 0} 行`));
   const log = element("pre", "log-output");
-  log.textContent = job.logs?.join("\n") || "暂无日志";
+  log.dataset.jobId = job.id;
+  log.textContent = logText;
 
   detail.replaceChildren(header, definitions, logHeading, log);
-  if (state.cancellationErrors.has(job.id)) {
-    detail.prepend(element("div", "error-banner cancel-error", state.cancellationErrors.get(job.id)));
-  }
-  if (job.log_error) {
-    detail.appendChild(element("div", "error-banner", `无法读取日志：${job.log_error}`));
-  }
-  if (job.detail_error) {
-    detail.appendChild(element("div", "error-banner", `无法刷新作业说明：${job.detail_error}`));
-  }
+  log.scrollTop = followLog ? log.scrollHeight : previousScroll;
+  if (cancelError) detail.prepend(element("div", "error-banner cancel-error", cancelError));
+  errors.forEach((message) => detail.appendChild(element("div", "error-banner", message)));
 }
 
 async function cancelJob(job, button) {
@@ -722,7 +837,7 @@ async function cancelJob(job, button) {
   button.textContent = "正在取消...";
   let accepted = false;
   try {
-    const response = await fetch(`/api/v1/jobs/${encodeURIComponent(job.id)}/cancel`, {
+    const response = await fetch(jobUrl(job.id, job.server, "/cancel"), {
       method: "POST",
       headers: { Accept: "application/json" },
     });
@@ -741,6 +856,7 @@ async function cancelJob(job, button) {
     const errorText = `无法取消作业：${error.message}`;
     state.cancellationErrors.set(job.id, errorText);
     const message = element("div", "error-banner cancel-error", errorText);
+    forget("job");
     if (state.selectedJobId === job.id) byId("job-detail").prepend(message);
   } finally {
     // An accepted request stays disabled until a detail response confirms the
@@ -756,8 +872,14 @@ async function cancelJob(job, button) {
   }
 }
 
-async function selectJob(jobId, { autoRefresh = true } = {}) {
+function jobUrl(jobId, server, suffix = "") {
+  const path = `/api/v1/jobs/${encodeURIComponent(jobId)}${suffix}`;
+  return server ? `${path}?server=${encodeURIComponent(server)}` : path;
+}
+
+async function selectJob(jobId, { autoRefresh = true, server = null } = {}) {
   state.selectedJobId = jobId;
+  state.selectedJobServer = server;
   state.selectedJobAutoRefresh = autoRefresh;
   document.querySelectorAll(".queue-row").forEach((row) => {
     row.classList.toggle("is-selected", row.dataset.jobId === jobId);
@@ -773,14 +895,16 @@ async function refreshSelectedJob({ showLoading = false } = {}) {
   state.pendingDetailJobId = jobId;
   const detail = byId("job-detail");
   if (showLoading) {
+    forget("job");
     detail.replaceChildren(element("div", "loading-row", "正在读取作业详情..."));
   }
   try {
-    const job = await fetchJson(`/api/v1/jobs/${encodeURIComponent(jobId)}`);
+    const job = await fetchJson(jobUrl(jobId, state.selectedJobServer));
     if (state.selectedJobId === jobId && requestId === state.detailRequestId) renderJob(job);
   } catch (error) {
     if (state.selectedJobId === jobId && requestId === state.detailRequestId) {
       const warning = element("div", "error-banner detail-error", `无法读取作业详情：${error.message}`);
+      forget("job");
       if (showLoading) detail.replaceChildren(warning);
       else {
         detail.querySelector(".detail-error")?.remove();
@@ -815,9 +939,14 @@ function updateConnection() {
   byId("refresh-button").classList.toggle("is-spinning", polls.some((poll) => poll.pending));
 }
 
-async function refreshStream(key, url, render, errorId, label) {
+async function refreshStream(key, url, render, errorId, label, { force = false } = {}) {
   const poll = state.polls[key] ||= { pending: false, succeeded: false };
-  if (poll.pending) return;
+  if (poll.pending) {
+    // A forced read (manual refresh, cancellation) must not be dropped while an
+    // older poll is in flight; run it as soon as that poll finishes.
+    if (force) poll.rerun = () => refreshStream(key, url, render, errorId, label, { force });
+    return;
+  }
   poll.pending = true;
   updateConnection();
   try {
@@ -840,6 +969,9 @@ async function refreshStream(key, url, render, errorId, label) {
     poll.pending = false;
     updateConnection();
   }
+  const rerun = poll.rerun;
+  poll.rerun = null;
+  if (rerun) await rerun();
 }
 
 async function refresh({ manual = false, forceDetails = false } = {}) {
@@ -854,7 +986,14 @@ async function refresh({ manual = false, forceDetails = false } = {}) {
   // Each stream renders as soon as it returns and has its own overlap guard.
   await Promise.all([
     refreshStream("snapshot", "/api/v1/snapshot", renderSnapshot, "snapshot-refresh-error", "GPU"),
-    refreshStream("queue", "/api/v1/queue", renderQueue, "queue-refresh-error", "当前队列"),
+    refreshStream(
+      "queue",
+      manual || forceDetails ? "/api/v1/queue?fresh=true" : "/api/v1/queue",
+      renderQueue,
+      "queue-refresh-error",
+      "当前队列",
+      { force: manual || forceDetails },
+    ),
     refreshStream("health", "/healthz", () => {}, null, "健康检查"),
     refreshStream("eta", "/api/v1/process-etas", renderProcessEtas, null, "日志估时"),
   ]);

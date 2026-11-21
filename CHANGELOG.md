@@ -13,6 +13,12 @@ for tested behavior and limits.
   records. Version 0.4 rejects records containing `exclusive: false` or the
   new launch fields `start_ticks` and `boot_id`. An exclusive job started on
   0.5 can therefore block rollback to 0.4 even after the job finishes.
+- Show each card's GPUOps jobs, their mode and request, and the remaining
+  shared budget in the Web console, along with per-process GPU memory and the
+  other jobs on a selected job's cards. Read a selected job from its own
+  server instead of searching every server, and cache the active queue for 15
+  seconds like GPU samples; manual refresh and cancellation bypass the cache.
+  Unchanged polls no longer redraw the page, and logs keep their scroll position.
 
 ## 0.4.0 — Unreleased
 

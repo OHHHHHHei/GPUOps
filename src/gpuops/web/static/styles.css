@@ -377,6 +377,9 @@ main {
   text-transform: uppercase;
 }
 
+/* Fixed columns need room for the command; narrower windows scroll the table. */
+.gpu-table { min-width: 1320px; }
+
 .gpu-table th:nth-child(1),
 .gpu-table td:nth-child(1) { width: 48px; }
 .gpu-table th:nth-child(2),
@@ -386,15 +389,35 @@ main {
 .gpu-table th:nth-child(4),
 .gpu-table td:nth-child(4) { width: 118px; }
 .gpu-table th:nth-child(5),
-.gpu-table td:nth-child(5) { width: 64px; }
+.gpu-table td:nth-child(5) { width: 220px; }
 .gpu-table th:nth-child(6),
-.gpu-table td:nth-child(6) { width: 86px; }
+.gpu-table td:nth-child(6) { width: 64px; }
 .gpu-table th:nth-child(7),
-.gpu-table td:nth-child(7) { width: 94px; }
-.gpu-table th:nth-child(9),
-.gpu-table td:nth-child(9) { width: 102px; }
+.gpu-table td:nth-child(7) { width: 86px; }
+.gpu-table th:nth-child(8),
+.gpu-table td:nth-child(8) { width: 136px; }
 .gpu-table th:nth-child(10),
-.gpu-table td:nth-child(10) { width: 158px; }
+.gpu-table td:nth-child(10) { width: 102px; }
+.gpu-table th:nth-child(11),
+.gpu-table td:nth-child(11) { width: 158px; }
+
+.capacity-cell {
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.capacity-summary {
+  color: var(--muted);
+}
+
+.placement-mode {
+  display: block;
+  font-size: 12px;
+}
+
+.view-tab-list {
+  display: contents;
+}
 
 .eta-note { margin: 0 0 14px; font-size: 12px; }
 
@@ -816,6 +839,10 @@ footer {
   .gpu-table td {
     display: block;
     width: 100% !important;
+  }
+
+  .gpu-table {
+    min-width: 0;
   }
 
   .gpu-table thead {

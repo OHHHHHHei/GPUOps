@@ -337,6 +337,11 @@ supervisors continue, and a restarted worker reconciles their receipts/results.
 
 These values are planning aids, not reservations or completion guarantees.
 
+The browser polls every 5 seconds while its tab is visible. GPU snapshots and
+the active queue are cached for 15 seconds; the refresh button and cancellation
+read the queue again. A selected job is read from the server named by its queue
+or history row, so detail polling contacts one Worker.
+
 The separate `/api/v1/process-etas` endpoint keeps log SSH reads out of the GPU
 snapshot response. The browser attaches estimates only when server, PID, and
 process start ticks match, and shows progress/sample times in the tooltip.

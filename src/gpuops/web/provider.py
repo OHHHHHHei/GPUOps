@@ -36,18 +36,21 @@ class DashboardProvider(Protocol):
     async def get_process_etas(self) -> JsonObject:
         """Return log estimates separately from live GPU telemetry."""
 
-    async def get_queue(self) -> JsonObject:
-        """Return queued and running jobs."""
+    async def get_queue(self, *, fresh: bool = False) -> JsonObject:
+        """Return queued and running jobs; ``fresh`` skips any short-lived cache."""
 
     async def get_history(
         self, *, limit: int = 50, project: str | None = None, cursor: str | None = None
     ) -> JsonObject:
         """Return one page of completed jobs and available projects."""
 
-    async def get_job(self, job_id: str) -> JsonObject | None:
-        """Return one job including recent logs, or None when absent."""
+    async def get_job(self, job_id: str, *, server: str | None = None) -> JsonObject | None:
+        """Return one job including recent logs, or None when absent.
 
-    async def cancel_job(self, job_id: str) -> JsonObject | None:
+        ``server`` names the job's server when the caller already knows it.
+        """
+
+    async def cancel_job(self, job_id: str, *, server: str | None = None) -> JsonObject | None:
         """Request cancellation of one managed job, or return None when absent."""
 
     async def health(self) -> JsonObject:
@@ -271,7 +274,7 @@ class LiveProvider:
             ],
         }
 
-    async def get_queue(self) -> JsonObject:
+    async def get_queue(self, *, fresh: bool = False) -> JsonObject:
         return {"updated_at": _now_iso(), "mode": "monitor-only", "items": []}
 
     async def get_history(
@@ -287,10 +290,10 @@ class LiveProvider:
             "next_cursor": None,
         }
 
-    async def get_job(self, job_id: str) -> JsonObject | None:
+    async def get_job(self, job_id: str, *, server: str | None = None) -> JsonObject | None:
         return None
 
-    async def cancel_job(self, job_id: str) -> JsonObject | None:
+    async def cancel_job(self, job_id: str, *, server: str | None = None) -> JsonObject | None:
         del job_id
         raise ProviderUnavailable("job control is unavailable in monitor-only mode")
 
@@ -391,6 +394,7 @@ class LiveProvider:
                 "temperature_c": None,
                 "power_watts": None,
                 "processes": [],
+                "capacity": None,
                 "error": server_error or "GPU data unavailable",
             }
 
@@ -418,9 +422,31 @@ class LiveProvider:
             "temperature_c": normalize_nonnegative_number(raw.get("temperature.gpu")),
             "power_watts": normalize_nonnegative_number(raw.get("power.draw")),
             "processes": [LiveProvider._process_snapshot(process) for process in processes],
+            "capacity": LiveProvider._capacity_snapshot(
+                raw.get("capacity"), current=forced_status is None and not card_error
+            ),
             "sampled_at": raw.get("sampled_at"),
             "error": card_error,
             "error_code": card_error_code,
+        }
+
+    @staticmethod
+    def _capacity_snapshot(raw: Any, *, current: bool) -> JsonObject | None:
+        """Managed jobs and the Worker's shared-memory budget for one card."""
+        if not current or not isinstance(raw, dict):
+            return None
+        return {
+            "jobs": [
+                {
+                    "run_id": job.get("run_id"),
+                    "exclusive": job.get("exclusive") is not False,
+                    "memory_mib": job.get("memory_mib"),
+                }
+                for job in raw.get("jobs") or []
+                if isinstance(job, dict)
+            ],
+            "max_jobs_per_gpu": raw.get("max_jobs_per_gpu"),
+            "available_memory_mib": raw.get("available_memory_mib"),
         }
 
     @staticmethod
@@ -460,7 +486,7 @@ class DemoProvider:
     async def get_process_etas(self) -> JsonObject:
         return {"updated_at": self._NOW, "servers": []}
 
-    async def get_queue(self) -> JsonObject:
+    async def get_queue(self, *, fresh: bool = False) -> JsonObject:
         payload = deepcopy(self._queue)
         for item in payload["items"]:
             item.pop("command", None)
@@ -511,11 +537,13 @@ class DemoProvider:
             "servers": [],
         }
 
-    async def get_job(self, job_id: str) -> JsonObject | None:
+    async def get_job(self, job_id: str, *, server: str | None = None) -> JsonObject | None:
         job = self._jobs.get(job_id)
-        return deepcopy(job) if job is not None else None
+        if job is None or server not in (None, job["server"]):
+            return None
+        return deepcopy(job)
 
-    async def cancel_job(self, job_id: str) -> JsonObject | None:
+    async def cancel_job(self, job_id: str, *, server: str | None = None) -> JsonObject | None:
         if job_id not in self._jobs:
             return None
         raise ProviderUnavailable("job control is unavailable in demo mode")
@@ -570,6 +598,8 @@ class DemoProvider:
         processes: list[JsonObject] | None = None,
         temperature: int | None = 37,
         error: str | None = None,
+        jobs: tuple[tuple[str, bool, int], ...] = (),
+        available_memory_mib: int | None = None,
     ) -> JsonObject:
         return {
             "id": f"gpu-{index}",
@@ -582,6 +612,24 @@ class DemoProvider:
             "temperature_c": temperature,
             "power_watts": None if utilization is None else round(29.0 + utilization * 2.1, 1),
             "processes": processes or [],
+            "capacity": (
+                None
+                if status == "offline"
+                else {
+                    "jobs": [
+                        {"run_id": run_id, "exclusive": exclusive, "memory_mib": memory}
+                        for run_id, exclusive, memory in jobs
+                    ],
+                    "max_jobs_per_gpu": 2,
+                    "available_memory_mib": (
+                        available_memory_mib
+                        if available_memory_mib is not None
+                        else None
+                        if memory_used is None
+                        else 24576 - memory_used
+                    ),
+                }
+            ),
             "error": error,
         }
 
@@ -615,6 +663,7 @@ class DemoProvider:
                 19_700 + index * 110,
                 processes=ddp_processes[index],
                 temperature=67 + index,
+                jobs=(("run-ranking-042", True, 18_000),),
             )
             for index in range(4)
         ]
@@ -637,16 +686,33 @@ class DemoProvider:
             "researcher",
             "python scripts/sweep.py --dataset synthetic --trial 7",
             10_860,
-            21_120,
+            10_880,
             job_id="run-sweep-007",
             eta_label="约 15:25",
             eta_end_at="2026-09-19T15:25:00+08:00",
             eta_confidence="high",
         )
+        infer_process = cls._process(
+            92410,
+            "researcher",
+            "python infer.py --model Qwen3.5-4B --shard a",
+            2_400,
+            10_240,
+            job_id="run-infer-a",
+        )
         gpu02_gpus = [
             cls._gpu(0, "idle", 0, 316, temperature=33),
             cls._gpu(1, "busy", 76, 8_730, processes=[eval_process], temperature=61),
-            cls._gpu(2, "busy", 96, 21_438, processes=[sweep_process], temperature=72),
+            cls._gpu(
+                2,
+                "busy",
+                91,
+                21_438,
+                processes=[sweep_process, infer_process],
+                temperature=72,
+                jobs=(("run-sweep-007", False, 11_500), ("run-infer-a", False, 11_500)),
+                available_memory_mib=1_258,
+            ),
             cls._gpu(3, "idle", 1, 318, temperature=35),
             cls._gpu(4, "idle", 0, 316, temperature=34),
             cls._gpu(5, "idle", 0, 317, temperature=34),
@@ -702,6 +768,8 @@ class DemoProvider:
                     "state": "running",
                     "server": "gpu01",
                     "gpus": [0, 1, 2, 3],
+                    "exclusive": True,
+                    "memory_mib": 18_000,
                     "priority": "normal",
                     "submitted_at": "2026-09-19T12:58:00+08:00",
                     "estimated_start": "2026-09-19T13:00:00+08:00",
@@ -719,6 +787,8 @@ class DemoProvider:
                     "state": "running",
                     "server": "gpu02",
                     "gpus": [2],
+                    "exclusive": False,
+                    "memory_mib": 11_500,
                     "priority": "high",
                     "submitted_at": "2026-09-19T11:28:00+08:00",
                     "estimated_start": "2026-09-19T11:31:00+08:00",
@@ -727,12 +797,30 @@ class DemoProvider:
                     "command": "python scripts/sweep.py --dataset synthetic --trial 7",
                 },
                 {
+                    "id": "run-infer-a",
+                    "name": "Qwen 推理 / shard a",
+                    "project": "benchmark-study",
+                    "state": "running",
+                    "server": "gpu02",
+                    "gpus": [2],
+                    "exclusive": False,
+                    "memory_mib": 11_500,
+                    "priority": "normal",
+                    "submitted_at": "2026-09-19T13:50:00+08:00",
+                    "estimated_start": "2026-09-19T13:52:00+08:00",
+                    "estimated_end": None,
+                    "eta_confidence": "unknown",
+                    "command": "python infer.py --model Qwen3.5-4B --shard a",
+                },
+                {
                     "id": "run-ablation-013",
                     "name": "Ablation / no context gate",
                     "project": "ranking-study",
                     "state": "queued",
                     "server": "gpu01",
                     "gpus": [],
+                    "exclusive": True,
+                    "memory_mib": 16_000,
                     "priority": "normal",
                     "submitted_at": "2026-09-19T14:20:00+08:00",
                     "estimated_start": "2026-09-19T16:10:00+08:00",
@@ -743,6 +831,37 @@ class DemoProvider:
                     ),
                 },
             ],
+        }
+
+    @classmethod
+    def _demo_explanation(cls, item: JsonObject) -> JsonObject:
+        if item["state"] != "running":
+            return {"waiting": True, "message": "Requested GPUs are occupied.", "details": {}}
+        peers = [
+            other
+            for other in cls._build_queue()["items"]
+            if other["server"] == item["server"] and other["state"] == "running"
+        ]
+        return {
+            "waiting": False,
+            "message": "The job is running.",
+            "details": {
+                "gpus": [
+                    {
+                        "allocated_index": index,
+                        "jobs": [
+                            {
+                                "run_id": peer["id"],
+                                "exclusive": peer["exclusive"],
+                                "memory_mib": peer["memory_mib"],
+                            }
+                            for peer in peers
+                            if index in peer["gpus"]
+                        ],
+                    }
+                    for index in item["gpus"]
+                ]
+            },
         }
 
     @classmethod
@@ -760,6 +879,10 @@ class DemoProvider:
                     "14:31:43 trial=7 step=9220/11000 score=0.7434",
                     "14:31:55 trial=7 step=9230/11000 score=0.7435",
                 ],
+                "run-infer-a": [
+                    "14:31:40 episode=312 step=6 thinking_tokens=4096",
+                    "14:31:52 episode=312 step=7 thinking_tokens=8192",
+                ],
                 "run-ablation-013": [
                     "14:20:00 submitted priority=normal requested_gpus=2",
                     "14:20:01 waiting for GPU 0-1 on gpu01",
@@ -775,6 +898,7 @@ class DemoProvider:
                     else None
                 ),
                 "logs": logs,
+                "explanation": cls._demo_explanation(item),
                 "events": [
                     {
                         "at": item["submitted_at"],
@@ -797,6 +921,8 @@ class DemoProvider:
                 "raw_state": "succeeded" if state == "finished" else state,
                 "server": server,
                 "gpus": [0],
+                "exclusive": True,
+                "memory_mib": 12_000,
                 "priority": "normal",
                 "submitted_at": "2026-09-19T10:00:00+08:00",
                 "finished_at": "2026-09-19T12:00:00+08:00",

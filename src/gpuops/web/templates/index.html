@@ -22,17 +22,21 @@
     </header>
 
     <nav class="view-tabs" aria-label="主视图">
-      <button class="tab-button is-active" type="button" data-view="overview" aria-selected="true">
-        GPU 总览
-      </button>
-      <button class="tab-button" type="button" data-view="queue" aria-selected="false">
-        作业队列 <span class="count-badge" id="queue-count">0</span>
-      </button>
+      <div class="view-tab-list" role="tablist" aria-label="主视图">
+        <button class="tab-button is-active" type="button" role="tab" data-view="overview"
+          aria-controls="view-overview" aria-selected="true">
+          GPU 总览
+        </button>
+        <button class="tab-button" type="button" role="tab" data-view="queue"
+          aria-controls="view-queue" aria-selected="false">
+          作业队列 <span class="count-badge" id="queue-count">0</span>
+        </button>
+      </div>
       <button class="icon-button" id="refresh-button" type="button" title="立即刷新" aria-label="立即刷新">↻</button>
     </nav>
 
     <main>
-      <section class="view is-active" id="view-overview" aria-labelledby="overview-heading">
+      <section class="view is-active" id="view-overview" role="tabpanel" aria-labelledby="overview-heading">
         <div class="section-heading">
           <div>
             <h2 id="overview-heading">GPU 总览</h2>
@@ -55,7 +59,7 @@
         </div>
       </section>
 
-      <section class="view" id="view-queue" aria-labelledby="queue-heading" hidden>
+      <section class="view" id="view-queue" role="tabpanel" aria-labelledby="queue-heading" hidden>
         <div class="section-heading">
           <div>
             <h2 id="queue-heading">作业队列</h2>

@@ -70,8 +70,8 @@ def create_app(provider: DashboardProvider | None = None) -> FastAPI:
         return await dashboard.get_process_etas()
 
     @app.get("/api/v1/queue")
-    async def queue():  # type: ignore[no-untyped-def]
-        return await dashboard.get_queue()
+    async def queue(fresh: bool = False):  # type: ignore[no-untyped-def]
+        return await dashboard.get_queue(fresh=fresh)
 
     @app.get("/api/v1/history")
     async def history(
@@ -85,9 +85,11 @@ def create_app(provider: DashboardProvider | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
     @app.get("/api/v1/jobs/{job_id}")
-    async def job(job_id: str):  # type: ignore[no-untyped-def]
+    async def job(  # type: ignore[no-untyped-def]
+        job_id: str, server: str | None = Query(None, min_length=1)
+    ):
         try:
-            result = await dashboard.get_job(job_id)
+            result = await dashboard.get_job(job_id, server=server)
         except ProviderConflict as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except ProviderUnavailable as error:
@@ -97,9 +99,11 @@ def create_app(provider: DashboardProvider | None = None) -> FastAPI:
         return result
 
     @app.post("/api/v1/jobs/{job_id}/cancel")
-    async def cancel_job(job_id: str):  # type: ignore[no-untyped-def]
+    async def cancel_job(  # type: ignore[no-untyped-def]
+        job_id: str, server: str | None = Query(None, min_length=1)
+    ):
         try:
-            result = await dashboard.cancel_job(job_id)
+            result = await dashboard.cancel_job(job_id, server=server)
         except ProviderConflict as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except ProviderUnavailable as error:

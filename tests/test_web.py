@@ -104,13 +104,15 @@ def test_custom_provider_is_used_through_protocol() -> None:
         async def get_snapshot(self) -> dict[str, Any]:
             return {"generated_at": "now", "summary": {}, "servers": []}
 
-        async def get_queue(self) -> dict[str, Any]:
+        async def get_queue(self, *, fresh: bool = False) -> dict[str, Any]:
             return {"updated_at": "now", "items": []}
 
-        async def get_job(self, job_id: str) -> dict[str, Any] | None:
+        async def get_job(self, job_id: str, *, server: str | None = None) -> dict[str, Any] | None:
             return {"id": job_id, "logs": []}
 
-        async def cancel_job(self, job_id: str) -> dict[str, Any] | None:
+        async def cancel_job(
+            self, job_id: str, *, server: str | None = None
+        ) -> dict[str, Any] | None:
             return {"id": job_id, "accepted": True}
 
         async def health(self) -> dict[str, Any]:
@@ -878,13 +880,13 @@ class FakeSnapshotProvider:
     async def get_snapshot(self) -> dict[str, Any]:
         return {"generated_at": CONTROL_NOW.isoformat(), "summary": {}, "servers": []}
 
-    async def get_queue(self) -> dict[str, Any]:
+    async def get_queue(self, *, fresh: bool = False) -> dict[str, Any]:
         raise AssertionError("control provider must own queue reads")
 
-    async def get_job(self, job_id: str) -> dict[str, Any] | None:
+    async def get_job(self, job_id: str, *, server: str | None = None) -> dict[str, Any] | None:
         raise AssertionError(f"control provider must own job reads: {job_id}")
 
-    async def cancel_job(self, job_id: str) -> dict[str, Any] | None:
+    async def cancel_job(self, job_id: str, *, server: str | None = None) -> dict[str, Any] | None:
         raise AssertionError(f"control provider must own cancellation: {job_id}")
 
     async def health(self) -> dict[str, Any]:
@@ -910,6 +912,8 @@ class FakeQueueTransport:
             "details": {},
         }
         self.cancel_calls: list[tuple[str, str]] = []
+        self.summary_calls: list[str] = []
+        self.lookup_calls: list[str] = []
 
     async def list_jobs(self, target: RemoteTarget) -> list[JobRecord]:
         result = self.jobs[target.server_id]
@@ -918,6 +922,7 @@ class FakeQueueTransport:
         return result
 
     async def list_summaries(self, target: RemoteTarget, *, statuses: set[JobStatus]):
+        self.summary_calls.append(target.server_id)
         return [
             JobSummary.from_record(record)
             for record in await self.list_jobs(target)
@@ -925,6 +930,7 @@ class FakeQueueTransport:
         ]
 
     async def get_job(self, target: RemoteTarget, run_id: str):
+        self.lookup_calls.append(target.server_id)
         return next(
             (record for record in await self.list_jobs(target) if record.run_id == run_id), None
         )
@@ -974,12 +980,14 @@ def control_provider(
     transport: FakeQueueTransport,
     *,
     log_tail_bytes: int = 64,
+    monotonic: Any = None,
 ) -> ControlDashboardProvider:
     return ControlDashboardProvider(
         FakeSnapshotProvider(),  # type: ignore[arg-type]
         transport,
         [CONTROL_TARGET_02, CONTROL_TARGET_01],
         clock=lambda: CONTROL_NOW,
+        monotonic=monotonic or (lambda: 0.0),
         log_tail_bytes=log_tail_bytes,
     )
 
@@ -1191,3 +1199,132 @@ def test_detail_log_eta_is_reused_by_queue_without_reading_more_logs():
         assert detail["eta"]["source_kind"] == "actual"
         assert detail["estimated_end"] == CONTROL_NOW.isoformat()
         assert not provider._log_samples
+
+
+def test_live_provider_shows_managed_jobs_and_shared_budget_per_card() -> None:
+    capacity = {
+        "jobs": [
+            {"run_id": "qwen-a", "exclusive": False, "memory_mib": 11500},
+            {"run_id": "qwen-b", "exclusive": False, "memory_mib": 11500},
+        ],
+        "max_jobs_per_gpu": 2,
+        "available_memory_mib": 1320,
+    }
+
+    class FakeMonitor:
+        async def collect_all(self) -> list[ServerResult]:
+            gpu = {
+                "index": 0,
+                "utilization.gpu": 45,
+                "memory.used": 20736,
+                "memory.total": 24576,
+                "processes": [],
+                "capacity": capacity,
+            }
+            return [
+                ServerResult(
+                    server=ServerTarget("xmu11", "xmu11", "xmu11"),
+                    online=True,
+                    data={"collected_at": datetime.now(timezone.utc).isoformat(), "gpus": [gpu]},
+                )
+            ]
+
+    provider = LiveProvider(FakeMonitor())  # type: ignore[arg-type]
+    with TestClient(create_app(provider)) as client:
+        gpu = client.get("/api/v1/snapshot").json()["servers"][0]["gpus"][0]
+
+    assert gpu["capacity"] == capacity
+
+
+def test_shared_budget_is_hidden_for_stale_or_failed_cards() -> None:
+    capacity = {"jobs": [], "max_jobs_per_gpu": 2, "available_memory_mib": 24000}
+    assert LiveProvider._capacity_snapshot(capacity, current=False) is None
+    assert LiveProvider._capacity_snapshot(None, current=True) is None
+    assert LiveProvider._capacity_snapshot(capacity, current=True) == capacity
+
+
+def test_queue_items_show_mode_and_per_gpu_request() -> None:
+    transport = FakeQueueTransport()
+    transport.jobs["gpu02"] = []
+    with TestClient(create_app(control_provider(transport))) as client:
+        items = client.get("/api/v1/queue").json()["items"]
+
+    assert {(item["exclusive"], item["memory_mib"]) for item in items} == {(True, 1024)}
+
+
+def test_queue_is_cached_between_polls_until_fresh_or_cancel() -> None:
+    transport = FakeQueueTransport()
+    transport.jobs["gpu02"] = []
+    now = [0.0]
+    provider = control_provider(transport, monotonic=lambda: now[0])
+    with TestClient(create_app(provider)) as client:
+        client.get("/api/v1/queue")
+        now[0] = 10.0
+        client.get("/api/v1/queue")
+        assert sorted(transport.summary_calls) == ["gpu01", "gpu02"]
+
+        client.get("/api/v1/queue?fresh=true")
+        assert len(transport.summary_calls) == 4
+        now[0] = 26.0
+        client.get("/api/v1/queue")
+        assert len(transport.summary_calls) == 6
+
+        client.post("/api/v1/jobs/queued-job/cancel?server=gpu01")
+        client.get("/api/v1/queue")
+        assert len(transport.summary_calls) == 8
+
+
+def test_queue_does_not_cache_an_offline_worker() -> None:
+    transport = FakeQueueTransport()
+    with TestClient(create_app(control_provider(transport))) as client:
+        client.get("/api/v1/queue")
+        client.get("/api/v1/queue")
+
+    assert transport.summary_calls.count("gpu02") == 2
+
+
+def test_job_detail_with_server_reads_only_that_worker() -> None:
+    transport = FakeQueueTransport()
+    with TestClient(create_app(control_provider(transport))) as client:
+        detail = client.get("/api/v1/jobs/running-job?server=gpu01")
+        missing_server = client.get("/api/v1/jobs/running-job?server=gpu09")
+
+    assert detail.status_code == 200
+    assert detail.json()["server"] == "gpu01"
+    assert transport.lookup_calls == []
+    assert transport.detail_calls == [("gpu01", "running-job")]
+    assert missing_server.status_code == 404
+
+
+def test_job_detail_with_server_reports_unreadable_worker() -> None:
+    transport = FakeQueueTransport()
+    transport.detail_error = ConnectionError("worker offline")
+    with TestClient(create_app(control_provider(transport))) as client:
+        response = client.get("/api/v1/jobs/running-job?server=gpu01")
+
+    assert response.status_code == 503
+    assert "worker offline" in response.json()["detail"]
+
+
+def test_cancel_with_server_skips_the_fleet_search() -> None:
+    transport = FakeQueueTransport()
+    with TestClient(create_app(control_provider(transport))) as client:
+        response = client.post("/api/v1/jobs/queued-job/cancel?server=gpu01")
+
+    assert response.status_code == 200
+    assert transport.lookup_calls == []
+    assert transport.cancel_calls == [("gpu01", "queued-job")]
+
+
+def test_demo_shows_two_shared_jobs_on_one_card() -> None:
+    with TestClient(create_app(DemoProvider())) as client:
+        snapshot = client.get("/api/v1/snapshot").json()
+        detail = client.get("/api/v1/jobs/run-infer-a?server=gpu02").json()
+        wrong_server = client.get("/api/v1/jobs/run-infer-a?server=gpu01")
+
+    card = snapshot["servers"][1]["gpus"][2]["capacity"]
+    assert [job["run_id"] for job in card["jobs"]] == ["run-sweep-007", "run-infer-a"]
+    assert detail["exclusive"] is False
+    peers = detail["explanation"]["details"]["gpus"][0]["jobs"]
+    assert {peer["run_id"] for peer in peers} == {"run-sweep-007", "run-infer-a"}
+    assert wrong_server.status_code == 404

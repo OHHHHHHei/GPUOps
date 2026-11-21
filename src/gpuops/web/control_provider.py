@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import shlex
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -74,6 +75,8 @@ class ControlDashboardProvider:
         targets: Sequence[RemoteTarget] | None = None,
         *,
         clock: Callable[[], datetime] = utc_now,
+        monotonic: Callable[[], float] = time.monotonic,
+        queue_cache_seconds: float = 15.0,
         log_tail_bytes: int = 64 * 1024,
         max_log_tail_bytes: int = 1024 * 1024,
     ) -> None:
@@ -87,8 +90,15 @@ class ControlDashboardProvider:
         self.transport = transport
         self._targets = tuple(sorted(targets)) if targets is not None else None
         self.clock = clock
+        self.monotonic = monotonic
+        self.queue_cache_seconds = queue_cache_seconds
         self.log_tail_bytes = log_tail_bytes
         self._log_samples: dict[tuple[str, str], tuple[JobRecord, dict]] = {}
+        # Browser polls every 5 s; GPU samples are cached for 15 s, and so is the queue.
+        self._hosts_lock = asyncio.Lock()
+        self._hosts_cache: tuple[float, tuple[RemoteTarget, ...], tuple[_HostJobs, ...]] | None = (
+            None
+        )
 
     @property
     def targets(self) -> tuple[RemoteTarget, ...]:
@@ -106,8 +116,8 @@ class ControlDashboardProvider:
     async def health(self) -> JsonObject:
         return await self.snapshot_provider.health()
 
-    async def get_queue(self) -> JsonObject:
-        hosts = await self._collect_hosts()
+    async def get_queue(self, *, fresh: bool = False) -> JsonObject:
+        hosts = await self._active_hosts(fresh=fresh)
         now = self.clock()
         items: list[JsonObject] = []
         for host in hosts:
@@ -162,11 +172,19 @@ class ControlDashboardProvider:
             ],
         }
 
-    async def get_job(self, job_id: str) -> JsonObject | None:
-        located = await self._locate(job_id)
-        if located is None:
-            return None
-        target, record = located
+    async def get_job(self, job_id: str, *, server: str | None = None) -> JsonObject | None:
+        record: JobRecord | None = None
+        if server is None:
+            located = await self._locate(job_id)
+            if located is None:
+                return None
+            target, record = located
+        else:
+            # The queue already names the server, so read that Worker only.
+            known = self._target(server)
+            if known is None:
+                return None
+            target = known
 
         async def load_detail() -> tuple[JobDetail | None, str | None]:
             try:
@@ -194,10 +212,15 @@ class ControlDashboardProvider:
             load_detail(), load_logs()
         )
         now = self.clock()
-        explanation = unknown_job_explanation(record, observed_at=now)
         if detail_result is not None:
             record = detail_result.record
             explanation = detail_result.explanation
+        elif record is None:
+            if detail_error is None:
+                return None
+            raise ProviderUnavailable(f"cannot read {job_id!r} on {server}: {detail_error}")
+        else:
+            explanation = unknown_job_explanation(record, observed_at=now)
 
         summary = JobSummary.from_record(record)
         key = (target.server_id, record.run_id)
@@ -230,11 +253,17 @@ class ControlDashboardProvider:
             log_eta = managed_log_estimate(*cached, now)
         return job_estimate(record, now, log_eta)
 
-    async def cancel_job(self, job_id: str) -> JsonObject | None:
-        located = await self._locate(job_id)
-        if located is None:
-            return None
-        target, _record = located
+    async def cancel_job(self, job_id: str, *, server: str | None = None) -> JsonObject | None:
+        if server is None:
+            located = await self._locate(job_id)
+            if located is None:
+                return None
+            target = located[0]
+        else:
+            known = self._target(server)
+            if known is None:
+                return None
+            target = known
         cancel = getattr(self.transport, "cancel", None)
         if cancel is None:
             raise ProviderUnavailable("remote transport does not support cancellation")
@@ -246,6 +275,7 @@ class ControlDashboardProvider:
             ) from error
         if cancelled.run_id != job_id:
             raise ProviderConflict("remote cancellation returned a different run id")
+        self._hosts_cache = None
         return {
             "id": cancelled.run_id,
             "server": target.server_id,
@@ -254,7 +284,29 @@ class ControlDashboardProvider:
             "accepted": cancelled.status in {JobStatus.CANCEL_REQUESTED, JobStatus.CANCELLED},
         }
 
-    async def _collect_hosts(self) -> tuple[_HostJobs, ...]:
+    def _target(self, server_id: str) -> RemoteTarget | None:
+        return next((target for target in self.targets if target.server_id == server_id), None)
+
+    async def _active_hosts(self, *, fresh: bool) -> tuple[_HostJobs, ...]:
+        targets = self.targets
+        async with self._hosts_lock:
+            cached = self._hosts_cache
+            if (
+                not fresh
+                and cached is not None
+                and cached[1] == targets
+                and self.monotonic() - cached[0] < self.queue_cache_seconds
+            ):
+                return cached[2]
+            hosts = await self._collect_hosts(targets)
+            # A failed Worker is retried on the next poll instead of being cached.
+            if all(host.online for host in hosts):
+                self._hosts_cache = (self.monotonic(), targets, hosts)
+            else:
+                self._hosts_cache = None
+            return hosts
+
+    async def _collect_hosts(self, targets: tuple[RemoteTarget, ...]) -> tuple[_HostJobs, ...]:
         async def collect(target: RemoteTarget) -> _HostJobs:
             try:
                 jobs = await self.transport.list_summaries(target, statuses=ACTIVE_JOB_STATUSES)
@@ -262,7 +314,7 @@ class ControlDashboardProvider:
             except Exception as error:
                 return _HostJobs(target, (), _error_text(error))
 
-        return tuple(await asyncio.gather(*(collect(target) for target in self.targets)))
+        return tuple(await asyncio.gather(*(collect(target) for target in targets)))
 
     async def _locate(self, job_id: str) -> tuple[RemoteTarget, JobRecord] | None:
         async def locate(target: RemoteTarget) -> tuple[RemoteTarget, JobRecord | None, str | None]:
@@ -295,6 +347,8 @@ def _queue_item(record: JobSummary, server_id: str, eta: JsonObject) -> JsonObje
         "raw_state": record.status.value,
         "server": server_id,
         "gpus": record.gpus,
+        "exclusive": record.exclusive,
+        "memory_mib": record.memory_mib,
         "priority": record.priority.value,
         "submitted_at": _iso(record.created_at),
         "estimated_start": _iso(record.started_at),

@@ -167,7 +167,8 @@ gpuops web
 ```
 
 Open `http://127.0.0.1:8787`. The console shows physical GPU indices, process
-ownership, active jobs, paginated history, job explanations, and bounded logs.
+ownership and GPU memory, each card's GPUOps jobs and shared budget, active jobs,
+paginated history, job explanations, and bounded logs.
 `gpuops web --demo` shows deterministic example data. The Web server accepts
 loopback binds only; use a trusted tunnel when you need remote access.
 

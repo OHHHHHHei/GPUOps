@@ -113,8 +113,10 @@ async function dashboard() {
     },
     fetch: async (url) => {
       requests.push(url);
-      assert.ok(routes.has(url), `unexpected request: ${url}`);
-      return routes.get(url)();
+      // A manual refresh bypasses the queue cache but reads the same route.
+      const route = url === "/api/v1/queue?fresh=true" && !routes.has(url) ? "/api/v1/queue" : url;
+      assert.ok(routes.has(route), `unexpected request: ${url}`);
+      return routes.get(route)();
     },
   });
   vm.runInContext(script, context, { filename: "app.js" });
@@ -924,4 +926,93 @@ test("managed job ETA displays source, phase and waiting states consistently", a
   assert.equal(app.context.formatJobEta(current), "等待调度");
   current.raw_state = "cancel_requested";
   assert.equal(app.context.formatJobEta(current), "取消中");
+});
+
+test("queue selections read and cancel the job on its own server", async () => {
+  const app = await dashboard();
+  const current = job("run-a", "line", { server: "gpu01" });
+  app.routes.set("/api/v1/jobs/run-a?server=gpu01", () => response(current));
+  app.routes.set("/api/v1/jobs/run-a/cancel?server=gpu01", () => response({ accepted: true }));
+
+  await app.context.selectJob("run-a", { server: "gpu01" });
+  await app.poll();
+  await app.context.cancelJob(current, app.detail().querySelector(".danger-button"));
+
+  assert.ok(app.requests.includes("/api/v1/jobs/run-a/cancel?server=gpu01"));
+  assert.ok(app.requests.includes("/api/v1/queue?fresh=true"));
+  assert.ok(!app.requests.includes("/api/v1/jobs/run-a"));
+});
+
+test("cards show managed jobs, their mode and the shared budget", async () => {
+  const app = await dashboard();
+  const capacity = {
+    jobs: [
+      { run_id: "qwen-a", exclusive: false, memory_mib: 11500 },
+      { run_id: "qwen-b", exclusive: false, memory_mib: 11500 },
+    ],
+    max_jobs_per_gpu: 2,
+    available_memory_mib: 1320,
+  };
+  const gpu = {
+    index: 0, status: "busy", utilization_percent: 45, memory_used_mib: 20736,
+    memory_total_mib: 24576, processes: [{ pid: 7, user: "me", command: "python infer.py",
+      gpu_memory_mib: 10240, elapsed_seconds: 60 }], capacity,
+  };
+  app.routes.set("/api/v1/snapshot", () => response({
+    summary: {}, servers: [server("xmu11", { gpus: [gpu] })],
+  }));
+  app.routes.set("/api/v1/queue", () => response({ servers: [], items: [
+    queueItem("qwen-a", { state: "running", raw_state: "running", exclusive: false, memory_mib: 11500 }),
+  ] }));
+  await app.poll();
+
+  const overview = texts(app.element("server-list"));
+  assert.match(overview, /共享 11,500 MiB · qwen-a/);
+  assert.match(overview, /2\/2 · 可再申请 1,320 MiB/);
+  assert.match(overview, /7 · 10\.0 GB/);
+  assert.match(texts(app.element("queue-body")), /共享 · 每卡 11,500 MiB/);
+});
+
+test("job details list the other jobs sharing each card", async () => {
+  const app = await dashboard();
+  app.routes.set("/api/v1/jobs/qwen-a", () => response(job("qwen-a", "line", {
+    exclusive: false,
+    memory_mib: 11500,
+    explanation: { waiting: false, message: "running", details: { gpus: [{
+      allocated_index: 0,
+      jobs: [
+        { run_id: "qwen-a", exclusive: false, memory_mib: 11500 },
+        { run_id: "qwen-b", exclusive: false, memory_mib: 11500 },
+      ],
+    }] } },
+  })));
+
+  await app.context.selectJob("qwen-a");
+
+  const detail = texts(app.detail());
+  assert.match(detail, /共享 · 每卡 11,500 MiB/);
+  assert.match(detail, /GPU 0：qwen-b（共享 11,500 MiB）/);
+  assert.doesNotMatch(detail, /GPU 0：qwen-a/);
+});
+
+test("unchanged polls keep the rendered rows and log position", async () => {
+  const app = await dashboard();
+  const items = [queueItem("run-a", { state: "running", raw_state: "running" })];
+  app.routes.set("/api/v1/queue", () => response({ servers: [], items }));
+  let logs = ["first"];
+  app.routes.set("/api/v1/jobs/run-a", () => response(job("run-a", logs.join("\n"))));
+  await app.poll();
+  const row = app.element("queue-body").children[0];
+  await app.context.selectJob("run-a");
+  const log = app.log();
+  Object.assign(log, { scrollHeight: 500, clientHeight: 100, scrollTop: 120 });
+
+  await app.poll();
+  assert.equal(app.element("queue-body").children[0], row);
+  assert.equal(app.log(), log);
+
+  logs = ["first", "second"];
+  await app.poll();
+  assert.notEqual(app.log(), log);
+  assert.equal(app.log().scrollTop, 120);
 });

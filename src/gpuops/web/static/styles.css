@@ -378,28 +378,28 @@ main {
 }
 
 /* Fixed columns need room for the command; narrower windows scroll the table. */
-.gpu-table { min-width: 1320px; }
+.gpu-table { min-width: 1100px; }
 
 .gpu-table th:nth-child(1),
-.gpu-table td:nth-child(1) { width: 48px; }
+.gpu-table td:nth-child(1) { width: 44px; }
 .gpu-table th:nth-child(2),
-.gpu-table td:nth-child(2) { width: 72px; }
+.gpu-table td:nth-child(2) { width: 68px; }
 .gpu-table th:nth-child(3),
-.gpu-table td:nth-child(3) { width: 66px; }
+.gpu-table td:nth-child(3) { width: 62px; }
 .gpu-table th:nth-child(4),
-.gpu-table td:nth-child(4) { width: 118px; }
+.gpu-table td:nth-child(4) { width: 108px; }
 .gpu-table th:nth-child(5),
-.gpu-table td:nth-child(5) { width: 220px; }
+.gpu-table td:nth-child(5) { width: 170px; }
 .gpu-table th:nth-child(6),
-.gpu-table td:nth-child(6) { width: 64px; }
+.gpu-table td:nth-child(6) { width: 58px; }
 .gpu-table th:nth-child(7),
-.gpu-table td:nth-child(7) { width: 86px; }
+.gpu-table td:nth-child(7) { width: 82px; }
 .gpu-table th:nth-child(8),
-.gpu-table td:nth-child(8) { width: 136px; }
+.gpu-table td:nth-child(8) { width: 124px; }
 .gpu-table th:nth-child(10),
-.gpu-table td:nth-child(10) { width: 102px; }
+.gpu-table td:nth-child(10) { width: 92px; }
 .gpu-table th:nth-child(11),
-.gpu-table td:nth-child(11) { width: 158px; }
+.gpu-table td:nth-child(11) { width: 120px; }
 
 .capacity-cell {
   min-width: 0;

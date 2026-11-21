@@ -234,7 +234,7 @@ function renderProcesses(gpu) {
   return {
     user: processStack(gpu.processes, (process) => process.user || "unknown"),
     pid: processStack(gpu.processes, (process) => (Number.isFinite(process.gpu_memory_mib)
-      ? `${process.pid ?? "-"} · ${(process.gpu_memory_mib / 1024).toFixed(1)} GB`
+      ? `${process.pid ?? "-"} · ${(process.gpu_memory_mib / 1024).toFixed(1)}G`
       : process.pid ?? "-")),
     command: error || processStack(
       gpu.processes,
@@ -302,23 +302,25 @@ function processStack(processes, valueFor, titleFor) {
 function renderCapacity(capacity) {
   if (!capacity?.jobs?.length) return "-";
   const stack = element("div", "process-stack");
+  // Compact GiB so the card fits the screen; the tooltip keeps the exact MiB.
+  const gb = (mib) => (Number.isFinite(mib) ? `${(mib / 1024).toFixed(1)}G` : "?");
   capacity.jobs.forEach((job) => {
-    const line = element(
-      "span",
-      "process-line",
-      `${job.exclusive ? "独占" : "共享"} ${formatMiB(job.memory_mib)} · ${job.run_id}`,
-    );
-    line.title = line.textContent;
+    const mode = job.exclusive ? "独占" : "共享";
+    const line = element("span", "process-line", `${mode} ${gb(job.memory_mib)} · ${job.run_id}`);
+    line.title = `${job.run_id}：${mode}，每卡申请 ${formatMiB(job.memory_mib)}`;
     stack.appendChild(line);
   });
   if (capacity.jobs.every((job) => !job.exclusive)) {
-    const available = Number.isFinite(capacity.available_memory_mib)
-      ? `可再申请 ${formatMiB(capacity.available_memory_mib)}` : "可再申请未知";
-    stack.appendChild(element(
+    const known = Number.isFinite(capacity.available_memory_mib);
+    const summary = element(
       "span",
       "process-line capacity-summary",
-      `${capacity.jobs.length}/${capacity.max_jobs_per_gpu ?? "?"} · ${available}`,
-    ));
+      `${capacity.jobs.length}/${capacity.max_jobs_per_gpu ?? "?"} · 余 ${
+        known ? gb(capacity.available_memory_mib) : "未知"}`,
+    );
+    summary.title = known
+      ? `可再申请 ${formatMiB(capacity.available_memory_mib)}` : "可再申请显存未知";
+    stack.appendChild(summary);
   }
   return stack;
 }

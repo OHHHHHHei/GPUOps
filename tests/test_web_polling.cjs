@@ -967,9 +967,9 @@ test("cards show managed jobs, their mode and the shared budget", async () => {
   await app.poll();
 
   const overview = texts(app.element("server-list"));
-  assert.match(overview, /共享 11,500 MiB · qwen-a/);
-  assert.match(overview, /2\/2 · 可再申请 1,320 MiB/);
-  assert.match(overview, /7 · 10\.0 GB/);
+  assert.match(overview, /共享 11\.2G · qwen-a/);
+  assert.match(overview, /2\/2 · 余 1\.3G/);
+  assert.match(overview, /7 · 10\.0G/);
   assert.match(texts(app.element("queue-body")), /共享 · 每卡 11,500 MiB/);
 });
 

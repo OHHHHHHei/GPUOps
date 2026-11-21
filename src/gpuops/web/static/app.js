@@ -205,11 +205,25 @@ function statusPill(status) {
 }
 
 function valueCell(label, value, className) {
-  const cell = element("td", className || "");
+  const empty = value === undefined || value === null || value === "-";
+  const cell = element("td", `${className || ""}${empty ? " empty-value" : ""}`.trim());
   cell.dataset.label = label;
   if (value instanceof Node) cell.appendChild(value);
   else cell.textContent = value ?? "-";
   return cell;
+}
+
+// Text over a thin bar; without a usable ratio only the text is shown.
+function meter(text, ratio, { warnAt = Infinity } = {}) {
+  if (!Number.isFinite(ratio)) return text;
+  const wrap = element("div", `meter${ratio >= warnAt ? " is-high" : ""}`);
+  wrap.appendChild(element("span", "meter-value", text));
+  const track = element("span", "meter-track");
+  const fill = element("span", "meter-fill");
+  fill.style.width = `${Math.round(Math.min(1, Math.max(0, ratio)) * 100)}%`;
+  track.appendChild(fill);
+  wrap.appendChild(track);
+  return wrap;
 }
 
 function renderSummary(summary) {
@@ -252,7 +266,7 @@ function formatProcessEta(process) {
   if (progress && progress.total !== null && progress.current === progress.total) {
     return "阶段已完成";
   }
-  if (!eta?.end_at || new Date(eta.end_at).getTime() <= Date.now()) return "暂无法估计";
+  if (!eta?.end_at || new Date(eta.end_at).getTime() <= Date.now()) return "-";
   const prefix = eta.source_kind === "submitted" ? "提交时估计 "
     : eta.scope === "phase" ? "阶段约 " : "约 ";
   return prefix + formatDate(eta.end_at).slice(0, -3);
@@ -330,18 +344,23 @@ function renderGpuRow(gpu) {
   const process = renderProcesses(gpu);
   row.appendChild(valueCell("GPU", String(gpu.index), "gpu-index"));
   row.appendChild(valueCell("状态", statusPill(gpu.status)));
-  row.appendChild(valueCell("利用率", Number.isFinite(gpu.utilization_percent)
-    ? `${gpu.utilization_percent}%` : "-", "numeric"));
-  row.appendChild(
-    valueCell("显存", formatMemory(gpu.memory_used_mib, gpu.memory_total_mib), "numeric memory-cell"),
-  );
-  row.appendChild(valueCell("GPUOps 作业", renderCapacity(gpu.capacity), "capacity-cell"));
+  const utilization = gpu.utilization_percent;
+  row.appendChild(valueCell("利用率", Number.isFinite(utilization)
+    ? meter(`${utilization}%`, utilization / 100) : "-", "numeric"));
+  row.appendChild(valueCell("显存", meter(
+    formatMemory(gpu.memory_used_mib, gpu.memory_total_mib),
+    Number.isFinite(gpu.memory_used_mib) && gpu.memory_total_mib > 0
+      ? gpu.memory_used_mib / gpu.memory_total_mib : NaN,
+    { warnAt: 0.9 },
+  ), "numeric memory-cell"));
+  row.appendChild(valueCell("作业", renderCapacity(gpu.capacity), "capacity-cell"));
+  const hot = Number.isFinite(gpu.temperature_c) && gpu.temperature_c >= 80;
   row.appendChild(valueCell("温度", Number.isFinite(gpu.temperature_c)
-    ? `${gpu.temperature_c}°C` : "-", "numeric"));
+    ? `${gpu.temperature_c}°C` : "-", `numeric${hot ? " is-hot" : ""}`));
   row.appendChild(valueCell("用户", process.user));
   row.appendChild(valueCell("PID", process.pid, "numeric mono"));
   row.appendChild(valueCell("命令", process.command, "command-cell mono"));
-  row.appendChild(valueCell("已运行", process.elapsed, "duration-cell"));
+  row.appendChild(valueCell("运行", process.elapsed, "duration-cell"));
   row.appendChild(valueCell("预计结束", process.eta, "eta-cell"));
   return row;
 }
@@ -361,17 +380,19 @@ function renderServer(server) {
   name.appendChild(element("h3", "", server.label));
   name.appendChild(statusPill(server.status));
   heading.appendChild(name);
-  heading.appendChild(element(
+  const meta = element(
     "span",
     `server-meta${server.stale || delayed ? " stale-meta" : ""}`,
     delayed
       ? server.last_seen
-        ? `采样延迟 · 上次成功采集 ${formatDate(server.last_seen)}`
-        : "采样延迟 · 等待首次成功采集"
+        ? `采样延迟 · ${formatDate(server.last_seen)}`
+        : "采样延迟"
       : server.stale
-        ? `陈旧数据 · 上次成功采集 ${formatDate(server.last_seen)}`
-      : `最后更新 ${formatDate(server.last_seen)}`,
-  ));
+        ? `陈旧数据 · ${formatDate(server.last_seen)}`
+      : formatDate(server.last_seen),
+  );
+  meta.title = "最近一次成功采集";
+  heading.appendChild(meta);
   section.appendChild(heading);
 
   if (problem) {
@@ -388,10 +409,11 @@ function renderServer(server) {
   const table = element("table", "data-table gpu-table");
   const head = document.createElement("thead");
   const headRow = document.createElement("tr");
-  ["GPU", "状态", "利用率", "显存", "GPUOps 作业", "温度", "用户", "PID · 显存", "命令", "已运行",
-    "预计结束"].forEach(
-    (label) => headRow.appendChild(element("th", "", label)),
-  );
+  ["GPU", "状态", "利用率", "显存", "作业", "温度", "用户", "PID", "命令", "运行", "预计结束"]
+    .forEach((label) => headRow.appendChild(element("th", "", label)));
+  headRow.children[4].title = "GPUOps 托管作业：模式、每卡申请显存；共享卡显示占用槽位和剩余预算";
+  headRow.children[7].title = "进程 PID 与其显存占用";
+  headRow.children[10].title = "根据可读日志粗估，约每 30 秒更新；后续任务可能继续占用 GPU。悬停时间查看依据";
   head.appendChild(headRow);
   table.appendChild(head);
   const body = document.createElement("tbody");
@@ -436,14 +458,16 @@ function renderGpuServers(snapshot) {
 function renderProcessEtas(payload) {
   state.processEtas = new Map(payload.servers.flatMap((server) =>
     server.processes.map((process) => [`${server.id}:${process.pid}`, process])));
-  byId("eta-update").textContent = `估时检查 ${formatDate(payload.updated_at)} · 日志采样时间见悬停说明`;
+  const etaUpdate = byId("eta-update");
+  etaUpdate.textContent = `估时 ${formatDate(payload.updated_at)}`;
+  etaUpdate.title = "日志估时检查时间；每条估时的日志采样时间见悬停说明";
   if (state.snapshot) renderGpuServers(state.snapshot);
 }
 
 function renderSnapshot(snapshot) {
   state.snapshot = snapshot;
   renderSummary(snapshot.summary);
-  byId("snapshot-time").textContent = `采集时间 ${formatDate(snapshot.generated_at)}`;
+  byId("snapshot-time").textContent = `采集 ${formatDate(snapshot.generated_at)}`;
   renderGpuServers(snapshot);
   const messages = snapshot.servers.length
     ? snapshot.servers.map(serverProblem).filter(Boolean)
@@ -482,10 +506,10 @@ function queueRow(item, queueMode) {
   if (queueMode === "history") {
     row.appendChild(valueCell("项目", item.project, "history-project-cell"));
     row.appendChild(valueCell("优先级", item.priority));
-    row.appendChild(valueCell("完成时间", formatDate(item.finished_at)));
+    row.appendChild(valueCell("完成", formatDate(item.finished_at)));
   } else {
     row.appendChild(valueCell("优先级", item.priority));
-    row.appendChild(valueCell("开始时间", item.estimated_start
+    row.appendChild(valueCell("开始", item.estimated_start
       ? formatDate(item.estimated_start) : "等待调度"));
     const end = valueCell("预计结束", formatJobEta(item));
     end.title = processEtaDetails(item);
@@ -520,8 +544,8 @@ function queueServerErrors(servers, mode) {
 
 function renderQueueHead(mode) {
   const labels = mode === "history"
-    ? ["状态", "作业", "服务器 / GPU", "项目", "优先级", "完成时间"]
-    : ["状态", "作业", "服务器 / GPU", "优先级", "开始时间", "预计结束"];
+    ? ["状态", "作业", "服务器 / GPU", "项目", "优先级", "完成"]
+    : ["状态", "作业", "服务器 / GPU", "优先级", "开始", "预计结束"];
   byId("queue-table").classList.toggle("is-history", mode === "history");
   byId("queue-head-row").replaceChildren(...labels.map((label) => element("th", "", label)));
 }
@@ -529,9 +553,7 @@ function renderQueueHead(mode) {
 function renderQueuePage(queue, mode) {
   const items = queue.items || [];
   renderQueueHead(mode);
-  byId("queue-time").textContent = mode === "history"
-    ? `历史更新时间 ${formatDate(queue.updated_at)} · 第 ${state.historyPreviousCursors.length + 1} 页`
-    : `更新时间 ${formatDate(queue.updated_at)}`;
+  byId("queue-time").textContent = `更新 ${formatDate(queue.updated_at)}`;
   const errors = queueServerErrors(queue.servers, mode);
   byId("queue-errors").replaceChildren(
     ...errors.map((message) => element("div", "error-banner", message)),
@@ -543,7 +565,7 @@ function renderQueuePage(queue, mode) {
     const row = document.createElement("tr");
     const emptyText = mode === "history"
       ? (state.historyProject ? "该项目暂无历史作业" : "暂无历史作业")
-      : "当前没有排队或运行中的作业";
+      : "暂无进行中的作业";
     const cell = valueCell("", emptyText, "empty-state");
     cell.colSpan = 6;
     row.appendChild(cell);
@@ -569,7 +591,7 @@ function clearJobSelection() {
   state.detailRequestId += 1;
   state.pendingDetailJobId = null;
   byId("job-detail").replaceChildren(
-    element("div", "empty-state", "选择一个作业查看命令、进度和日志。"),
+    element("div", "empty-state", "选择作业查看详情"),
   );
 }
 
@@ -609,10 +631,10 @@ function updateHistoryControls() {
 function renderHistoryLoading() {
   forget("queue");
   renderQueueHead("history");
-  byId("queue-time").textContent = "正在读取历史记录...";
+  byId("queue-time").textContent = "";
   byId("queue-errors").replaceChildren();
   const row = document.createElement("tr");
-  const cell = valueCell("", "正在读取历史记录...", "loading-row");
+  const cell = valueCell("", "加载中…", "loading-row");
   cell.colSpan = 6;
   row.appendChild(cell);
   byId("queue-body").replaceChildren(row);
@@ -803,7 +825,7 @@ function renderJob(job) {
   const actions = element("div", "job-actions");
   actions.appendChild(statusPill(status));
   if (cancellable) {
-    const cancelButton = element("button", "danger-button", cancelling ? "正在取消..." : "取消作业");
+    const cancelButton = element("button", "danger-button", cancelling ? "正在取消..." : "取消");
     cancelButton.type = "button";
     cancelButton.disabled = cancelling;
     cancelButton.addEventListener("click", () => cancelJob(job, cancelButton));
@@ -817,7 +839,7 @@ function renderJob(job) {
   });
 
   const logHeading = element("div", "log-heading");
-  logHeading.appendChild(element("h4", "", "最近日志"));
+  logHeading.appendChild(element("h4", "", "日志"));
   logHeading.appendChild(element("span", "subdued", `${job.logs?.length || 0} 行`));
   const log = element("pre", "log-output");
   log.dataset.jobId = job.id;
@@ -868,7 +890,7 @@ async function cancelJob(job, button) {
       const currentButton = byId("job-detail").querySelector(".danger-button");
       if (currentButton) {
         currentButton.disabled = false;
-        currentButton.textContent = "取消作业";
+        currentButton.textContent = "取消";
       }
     }
   }
@@ -898,7 +920,7 @@ async function refreshSelectedJob({ showLoading = false } = {}) {
   const detail = byId("job-detail");
   if (showLoading) {
     forget("job");
-    detail.replaceChildren(element("div", "loading-row", "正在读取作业详情..."));
+    detail.replaceChildren(element("div", "loading-row", "加载中…"));
   }
   try {
     const job = await fetchJson(jobUrl(jobId, state.selectedJobServer));
@@ -961,7 +983,9 @@ async function refreshStream(key, url, render, errorId, label, { force = false }
       || payload.servers?.some((server) => server.online === false
         || ["offline", "degraded"].includes(server.status));
     if (errorId) byId(errorId).replaceChildren();
-    byId("last-refresh").textContent = `最近收到数据 ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`;
+    const lastRefresh = byId("last-refresh");
+    lastRefresh.textContent = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+    lastRefresh.title = "最近收到数据";
   } catch (error) {
     poll.error = error.message;
     const message = `${label}刷新失败：${error.message}；${poll.succeeded ? "保留上次数据，等待重试" : "等待重试"}`;

@@ -37,7 +37,7 @@ def test_web_assets_include_managed_job_cancel_control() -> None:
     styles = (static_root / "styles.css").read_text(encoding="utf-8")
 
     assert 'method: "POST"' in script
-    assert '"取消作业"' in script
+    assert '"danger-button", cancelling ? "正在取消..." : "取消"' in script
     assert ".danger-button" in styles
 
 

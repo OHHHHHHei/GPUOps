@@ -3,68 +3,70 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="color-scheme" content="light">
+    <meta name="color-scheme" content="light dark">
     <title>GPUOps 控制台</title>
-    <link rel="icon" href="data:,">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2318181b'/%3E%3Cpath d='M9 9h6v6H9zM17 9h6v6h-6zM9 17h6v6H9z' fill='%23fafafa'/%3E%3Cpath d='M17 17h6v6h-6z' fill='%237c7cf0'/%3E%3C/svg%3E">
     <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}">
     <script defer src="{{ url_for('static', path='/app.js') }}"></script>
   </head>
   <body data-poll-interval="{{ poll_interval_ms }}">
     <header class="app-header">
       <div class="brand-block">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+          <rect width="32" height="32" rx="8"></rect>
+          <path d="M9 9h6v6H9zM17 9h6v6h-6zM9 17h6v6H9z"></path>
+          <path class="brand-mark-accent" d="M17 17h6v6h-6z"></path>
+        </svg>
         <h1>GPUOps</h1>
-        <span class="subdued">本地算力控制台</span>
       </div>
-      <div class="connection-state" id="connection-state" role="status">
-        <span class="connection-dot" aria-hidden="true"></span>
-        <span id="connection-label">正在连接</span>
+
+      <nav class="view-tabs" aria-label="主视图">
+        <div class="view-tab-list" role="tablist" aria-label="主视图">
+          <button class="tab-button is-active" type="button" role="tab" data-view="overview"
+            aria-controls="view-overview" aria-selected="true">GPU 总览</button>
+          <button class="tab-button" type="button" role="tab" data-view="queue"
+            aria-controls="view-queue" aria-selected="false">作业队列<span class="count-badge" id="queue-count">0</span></button>
+        </div>
+      </nav>
+
+      <div class="header-actions">
+        <div class="connection-state" id="connection-state" role="status">
+          <span class="connection-dot" aria-hidden="true"></span>
+          <span id="connection-label">连接中</span>
+          <span class="connection-time" id="last-refresh"></span>
+        </div>
+        <button class="icon-button" id="refresh-button" type="button" title="立即刷新" aria-label="立即刷新">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M16.5 10a6.5 6.5 0 1 1-1.9-4.6M16.5 3.5v3.6h-3.6"></path></svg>
+        </button>
       </div>
     </header>
 
-    <nav class="view-tabs" aria-label="主视图">
-      <div class="view-tab-list" role="tablist" aria-label="主视图">
-        <button class="tab-button is-active" type="button" role="tab" data-view="overview"
-          aria-controls="view-overview" aria-selected="true">
-          GPU 总览
-        </button>
-        <button class="tab-button" type="button" role="tab" data-view="queue"
-          aria-controls="view-queue" aria-selected="false">
-          作业队列 <span class="count-badge" id="queue-count">0</span>
-        </button>
-      </div>
-      <button class="icon-button" id="refresh-button" type="button" title="立即刷新" aria-label="立即刷新">↻</button>
-    </nav>
-
     <main>
       <section class="view is-active" id="view-overview" role="tabpanel" aria-labelledby="overview-heading">
-        <div class="section-heading">
-          <div>
-            <h2 id="overview-heading">GPU 总览</h2>
-            <p id="snapshot-time" class="subdued">等待首次采集</p>
-          </div>
+        <h2 class="visually-hidden" id="overview-heading">GPU 总览</h2>
+        <div class="toolbar">
           <div class="summary-strip" aria-label="GPU 状态统计">
-            <div><span class="summary-value" id="summary-idle">-</span><span>空闲</span></div>
-            <div><span class="summary-value" id="summary-busy">-</span><span>占用</span></div>
-            <div><span class="summary-value" id="summary-residual">-</span><span>残留</span></div>
-            <div><span class="summary-value" id="summary-unknown">-</span><span>未知</span></div>
-            <div><span class="summary-value" id="summary-offline">-</span><span>离线</span></div>
+            <div class="stat stat-idle"><span class="summary-value" id="summary-idle">-</span><span>空闲</span></div>
+            <div class="stat stat-busy"><span class="summary-value" id="summary-busy">-</span><span>占用</span></div>
+            <div class="stat stat-residual"><span class="summary-value" id="summary-residual">-</span><span>残留</span></div>
+            <div class="stat stat-unknown"><span class="summary-value" id="summary-unknown">-</span><span>未知</span></div>
+            <div class="stat stat-offline"><span class="summary-value" id="summary-offline">-</span><span>离线</span></div>
+          </div>
+          <div class="toolbar-meta">
+            <span id="snapshot-time"></span>
+            <span id="eta-update" aria-live="polite"></span>
           </div>
         </div>
-        <p class="subdued eta-note">结束时间根据可读日志粗估，每 30 秒更新；后续任务可能继续占用 GPU。悬停时间可查看依据。</p>
-        <p id="eta-update" class="subdued eta-note" aria-live="polite">等待日志估时</p>
         <div id="snapshot-refresh-error" class="message-area" aria-live="polite"></div>
         <div id="overview-errors" class="message-area" aria-live="polite"></div>
         <div id="server-list" class="server-list" aria-live="polite">
-          <div class="loading-row">正在读取已接入的服务器...</div>
+          <div class="loading-row">加载中…</div>
         </div>
       </section>
 
       <section class="view" id="view-queue" role="tabpanel" aria-labelledby="queue-heading" hidden>
-        <div class="section-heading">
-          <div>
-            <h2 id="queue-heading">作业队列</h2>
-            <p id="queue-time" class="subdued">等待队列数据</p>
-          </div>
+        <h2 class="visually-hidden" id="queue-heading">作业队列</h2>
+        <div class="toolbar">
           <div class="queue-toolbar">
             <div class="segmented-control" role="tablist" aria-label="作业范围">
               <button
@@ -73,22 +75,19 @@
                 data-queue-mode="active"
                 role="tab"
                 aria-selected="true"
-              >当前任务</button>
+              >当前</button>
               <button
                 class="queue-mode-button"
                 type="button"
                 data-queue-mode="history"
                 role="tab"
                 aria-selected="false"
-              >历史记录</button>
+              >历史</button>
             </div>
             <div class="history-controls" id="history-controls" hidden>
-              <label class="history-project-label" for="history-project">
-                <span>项目</span>
-                <select id="history-project">
-                  <option value="">全部项目</option>
-                </select>
-              </label>
+              <select id="history-project" aria-label="项目">
+                <option value="">全部项目</option>
+              </select>
               <div class="history-pagination" aria-label="历史记录分页">
                 <button
                   class="pagination-button"
@@ -97,7 +96,7 @@
                   title="上一页"
                   aria-label="上一页"
                   disabled
-                >←</button>
+                >‹</button>
                 <span id="history-page-label">第 1 页</span>
                 <button
                   class="pagination-button"
@@ -106,15 +105,18 @@
                   title="下一页"
                   aria-label="下一页"
                   disabled
-                >→</button>
+                >›</button>
               </div>
             </div>
+          </div>
+          <div class="toolbar-meta">
+            <span id="queue-time"></span>
           </div>
         </div>
         <div id="queue-refresh-error" class="message-area" aria-live="polite"></div>
         <div id="queue-errors" class="message-area" aria-live="polite"></div>
         <div class="queue-layout">
-          <div class="queue-region">
+          <div class="queue-region card">
             <table class="data-table queue-table" id="queue-table">
               <thead>
                 <tr id="queue-head-row">
@@ -122,25 +124,20 @@
                   <th>作业</th>
                   <th>服务器 / GPU</th>
                   <th>优先级</th>
-                  <th>开始时间</th>
+                  <th>开始</th>
                   <th>预计结束</th>
                 </tr>
               </thead>
               <tbody id="queue-body">
-                <tr><td colspan="6" class="loading-row">正在读取队列...</td></tr>
+                <tr><td colspan="6" class="loading-row">加载中…</td></tr>
               </tbody>
             </table>
           </div>
-          <aside class="job-detail" id="job-detail" aria-live="polite">
-            <div class="empty-state">选择一个作业查看命令、进度和日志。</div>
+          <aside class="job-detail card" id="job-detail" aria-live="polite">
+            <div class="empty-state">选择作业查看详情</div>
           </aside>
         </div>
       </section>
     </main>
-
-    <footer>
-      <span>仅本机访问</span>
-      <span id="last-refresh">尚未刷新</span>
-    </footer>
   </body>
 </html>

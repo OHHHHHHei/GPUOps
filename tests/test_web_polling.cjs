@@ -10,6 +10,7 @@ class Element {
   constructor() {
     this.children = [];
     this.dataset = {};
+    this.style = {};
     this.classList = { add() {}, remove() {}, toggle() {} };
   }
   appendChild(child) { child.parent = this; this.children.push(child); }
@@ -181,7 +182,7 @@ test("GPU ETA shows a dated estimate and exposes its log evidence", async () => 
   process.eta.scope = "phase";
   assert.match(app.context.formatProcessEta(process), /^阶段约 /);
   process.eta.end_at = null;
-  assert.equal(app.context.formatProcessEta(process), "暂无法估计");
+  assert.equal(app.context.formatProcessEta(process), "-");
 });
 
 test("structured progress renders safely and reports phase completion without completing the job", async () => {
@@ -701,7 +702,6 @@ test("late ETA response cannot attach to a reused PID", async () => {
   }] }] }));
   await pending;
   function texts(node) { return [node.textContent || "", ...node.children.flatMap(texts)].join(" "); }
-  assert.match(texts(app.element("server-list")), /暂无法估计/);
   assert.doesNotMatch(texts(app.element("server-list")), /约 /);
   snapshot.servers[0].gpus[0].processes[0].start_time_ticks = 456;
   await app.poll();
@@ -750,10 +750,8 @@ test("stale GPU telemetry keeps metrics but never attaches cached process ETAs",
 
   const rendered = texts(app.element("server-list"));
   assert.match(rendered, /陈旧数据/);
-  assert.match(rendered, /上次成功采集/);
   assert.match(rendered, /遥测采集超时/);
   assert.match(rendered, /91%/);
-  assert.match(rendered, /暂无法估计/);
   assert.doesNotMatch(rendered, /约 /);
   assert.equal(app.element("summary-idle").textContent, 0);
 });
@@ -790,7 +788,6 @@ test("per-GPU errors suppress ETAs and render concise partial-host warnings", as
   assert.match(texts(app.element("overview-errors")), /GPU 3 异常.*GPU 6 延迟/);
   assert.match(rendered, /NVML query failed/);
   assert.match(rendered, /GPU sample is stale/);
-  assert.match(rendered, /暂无法估计/);
   assert.doesNotMatch(rendered, /约 /);
   assert.doesNotMatch(app.element("server-list").children[0].className, /is-stale/);
 
@@ -884,7 +881,7 @@ test("sampling delay is amber while timeout and connection failures remain red",
   assert.match(sections[1].className, /is-delayed/);
   assert.match(sections[2].className, /is-delayed/);
   assert.doesNotMatch(sections[3].className, /is-delayed/);
-  assert.match(texts(sections[2]), /等待首次成功采集/);
+  assert.match(texts(sections[2]), /暂无可用的成功采样/);
 });
 
 test("degraded hosts without cached data stay visible and fresh data clears warnings", async () => {

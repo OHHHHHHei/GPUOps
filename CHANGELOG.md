@@ -19,6 +19,9 @@ for tested behavior and limits.
   server instead of searching every server, and cache the active queue for 15
   seconds like GPU samples; manual refresh and cancellation bypass the cache.
   Unchanged polls no longer redraw the page, and logs keep their scroll position.
+- Restyle the Web console: one header bar, separate server cards, utilization
+  and memory bars, dot status indicators, compact mobile GPU cards, and a dark
+  theme that follows the system. Explanations move into tooltips.
 
 ## 0.4.0 — Unreleased
 

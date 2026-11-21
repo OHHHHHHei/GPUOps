@@ -13,7 +13,7 @@ from gpuops.control import RemoteTarget
 from gpuops.models import Allocation, JobRecord, JobSpec, JobStatus, JobSummary, LaunchInfo
 from gpuops.monitor import ServerTarget
 from gpuops.monitor.service import ServerResult
-from gpuops.transport import JobDetail, SshWorkerTransport
+from gpuops.transport import JobDetail, RemoteWorkerError, SshWorkerTransport
 from gpuops.web import DemoProvider, LiveProvider, create_app, validate_loopback_host
 from gpuops.web.control_provider import ControlDashboardProvider
 
@@ -964,7 +964,11 @@ class FakeQueueTransport:
 
     async def cancel(self, target: RemoteTarget, run_id: str) -> JobRecord:
         self.cancel_calls.append((target.server_id, run_id))
-        original = next(record for record in self.jobs[target.server_id] if record.run_id == run_id)
+        original = next(
+            (record for record in await self.list_jobs(target) if record.run_id == run_id), None
+        )
+        if original is None:
+            raise RemoteWorkerError("job_not_found", f"job {run_id!r} was not found")
         return JobRecord(
             run_id=original.run_id,
             spec=original.spec,
@@ -1296,14 +1300,64 @@ def test_job_detail_with_server_reads_only_that_worker() -> None:
     assert missing_server.status_code == 404
 
 
+def test_job_detail_with_server_keeps_logs_when_only_the_explanation_fails() -> None:
+    transport = FakeQueueTransport()
+    transport.detail_error = ConnectionError("explanation RPC unavailable")
+    with TestClient(create_app(control_provider(transport))) as client:
+        response = client.get("/api/v1/jobs/running-job?server=gpu01")
+
+    assert response.status_code == 200
+    detail = response.json()
+    assert detail["raw_state"] == "running"
+    assert detail["logs"][-1] == "last-line"
+    assert "explanation RPC unavailable" in detail["detail_error"]
+    assert detail["explanation"]["code"] == "unknown"
+    assert transport.lookup_calls == ["gpu01"]
+
+
 def test_job_detail_with_server_reports_unreadable_worker() -> None:
     transport = FakeQueueTransport()
     transport.detail_error = ConnectionError("worker offline")
+    transport.jobs["gpu01"] = ConnectionError("worker offline")
     with TestClient(create_app(control_provider(transport))) as client:
         response = client.get("/api/v1/jobs/running-job?server=gpu01")
 
     assert response.status_code == 503
     assert "worker offline" in response.json()["detail"]
+
+
+def test_cancel_with_server_reports_a_missing_job_as_not_found() -> None:
+    transport = FakeQueueTransport()
+    with TestClient(create_app(control_provider(transport))) as client:
+        response = client.post("/api/v1/jobs/not-present/cancel?server=gpu01")
+
+    assert response.status_code == 404
+    assert transport.cancel_calls == [("gpu01", "not-present")]
+
+
+def test_queue_read_in_flight_during_cancellation_is_not_cached() -> None:
+    transport = FakeQueueTransport()
+    transport.jobs["gpu02"] = []
+    provider = control_provider(transport)
+    release = asyncio.Event()
+    list_summaries = transport.list_summaries
+
+    async def slow_list_summaries(target: RemoteTarget, *, statuses: set[JobStatus]):
+        await release.wait()
+        return await list_summaries(target, statuses=statuses)
+
+    transport.list_summaries = slow_list_summaries  # type: ignore[method-assign]
+
+    async def scenario() -> None:
+        stale_read = asyncio.create_task(provider.get_queue())
+        await asyncio.sleep(0)
+        await provider.cancel_job("queued-job", server="gpu01")
+        release.set()
+        await stale_read
+        await provider.get_queue()
+
+    asyncio.run(scenario())
+    assert len(transport.summary_calls) == 4
 
 
 def test_cancel_with_server_skips_the_fleet_search() -> None:

@@ -20,7 +20,7 @@ from gpuops.models import (
     utc_now,
 )
 from gpuops.queries import collect_history
-from gpuops.transport import JobDetail, JobHistory, unknown_job_explanation
+from gpuops.transport import JobDetail, JobHistory, RemoteWorkerError, unknown_job_explanation
 from gpuops.web.job_eta import job_estimate, managed_log_estimate
 from gpuops.web.provider import (
     DashboardProvider,
@@ -96,6 +96,8 @@ class ControlDashboardProvider:
         self._log_samples: dict[tuple[str, str], tuple[JobRecord, dict]] = {}
         # Browser polls every 5 s; GPU samples are cached for 15 s, and so is the queue.
         self._hosts_lock = asyncio.Lock()
+        # Bumped by cancellation so a queue read already in flight cannot be cached.
+        self._hosts_generation = 0
         self._hosts_cache: tuple[float, tuple[RemoteTarget, ...], tuple[_HostJobs, ...]] | None = (
             None
         )
@@ -215,11 +217,19 @@ class ControlDashboardProvider:
         if detail_result is not None:
             record = detail_result.record
             explanation = detail_result.explanation
-        elif record is None:
-            if detail_error is None:
-                return None
-            raise ProviderUnavailable(f"cannot read {job_id!r} on {server}: {detail_error}")
         else:
+            if record is None:
+                if detail_error is None:
+                    return None
+                # Keep the logs: read the plain record when only the explanation failed.
+                try:
+                    record = await self.transport.get_job(target, job_id)
+                except Exception as error:
+                    raise ProviderUnavailable(
+                        f"cannot read {job_id!r} on {target.server_id}: {_error_text(error)}"
+                    ) from error
+                if record is None:
+                    return None
             explanation = unknown_job_explanation(record, observed_at=now)
 
         summary = JobSummary.from_record(record)
@@ -269,12 +279,19 @@ class ControlDashboardProvider:
             raise ProviderUnavailable("remote transport does not support cancellation")
         try:
             cancelled = await cancel(target, job_id)
+        except RemoteWorkerError as error:
+            if error.code == "job_not_found":
+                return None
+            raise ProviderUnavailable(
+                f"cannot cancel {job_id!r} on {target.server_id}: {_error_text(error)}"
+            ) from error
         except Exception as error:
             raise ProviderUnavailable(
                 f"cannot cancel {job_id!r} on {target.server_id}: {_error_text(error)}"
             ) from error
         if cancelled.run_id != job_id:
             raise ProviderConflict("remote cancellation returned a different run id")
+        self._hosts_generation += 1
         self._hosts_cache = None
         return {
             "id": cancelled.run_id,
@@ -298,9 +315,10 @@ class ControlDashboardProvider:
                 and self.monotonic() - cached[0] < self.queue_cache_seconds
             ):
                 return cached[2]
+            generation = self._hosts_generation
             hosts = await self._collect_hosts(targets)
             # A failed Worker is retried on the next poll instead of being cached.
-            if all(host.online for host in hosts):
+            if generation == self._hosts_generation and all(host.online for host in hosts):
                 self._hosts_cache = (self.monotonic(), targets, hosts)
             else:
                 self._hosts_cache = None

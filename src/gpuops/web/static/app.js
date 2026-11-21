@@ -704,6 +704,52 @@ function formatJobEta(job) {
   return job.eta ? formatProcessEta(job) : formatDate(job.estimated_end);
 }
 
+function jobDetailLines(job) {
+  const lines = [
+    ["项目", job.project],
+    ["服务器", job.server],
+    ["GPU", job.gpus?.length ? job.gpus.join(", ") : "待分配"],
+  ];
+  const mode = placementMode(job);
+  if (mode) lines.push(["调度方式", mode]);
+  const peers = (job.explanation?.details?.gpus || [])
+    .map((card) => ({
+      index: card.allocated_index,
+      others: (card.jobs || []).filter((peer) => peer.run_id !== job.id),
+    }))
+    .filter((card) => card.others.length)
+    .map((card) => `GPU ${card.index}：${card.others.map((peer) => `${peer.run_id}（${
+      peer.exclusive ? "独占" : "共享"} ${formatMiB(peer.memory_mib)}）`).join("、")}`);
+  if (peers.length) lines.push(["同卡作业", peers.join("\n"), "wrap-anywhere"]);
+  lines.push(["工作目录", job.working_directory, "mono wrap-anywhere"]);
+  lines.push(["命令", job.command, "mono wrap-anywhere"]);
+  lines.push(job.finished_at
+    ? ["完成时间", formatDate(job.finished_at)]
+    : [job.eta?.scope === "phase" ? "阶段预计结束" : "预计结束", formatJobEta(job)]);
+  if (!job.finished_at && job.eta) {
+    const progress = formatStructuredProgress(job.eta);
+    if (progress) lines.push(["阶段进度", progress]);
+    const source = job.eta.format === "gpuops_progress"
+      ? "GPUOps 结构化日志"
+      : { logs: "日志进度", submitted: "提交时长" }[job.eta.source_kind];
+    if (source) lines.push(["估计来源", source]);
+    lines.push(["估计依据", processEtaDetails(job), "wrap-anywhere"]);
+  }
+  if (job.explanation?.message) {
+    lines.push([job.explanation.waiting ? "等待原因" : "状态说明", job.explanation.message]);
+  }
+  if (job.explanation?.next_action) {
+    lines.push([
+      "建议操作",
+      NEXT_ACTION_LABELS[job.explanation.next_action] || job.explanation.next_action,
+    ]);
+  }
+  if (job.failure_reason && !job.explanation?.details?.failure_reason) {
+    lines.push(["失败原因", job.failure_reason]);
+  }
+  return lines;
+}
+
 function renderJob(job) {
   if (state.selectedJobId === job.id) {
     state.selectedJobAutoRefresh = DETAIL_POLLING_STATES.has(job.raw_state);
@@ -712,11 +758,22 @@ function renderJob(job) {
     state.cancellingJobIds.delete(job.id);
     state.cancellationErrors.delete(job.id);
   }
+  // Compare only what is shown: Workers stamp each explanation with a new
+  // observed_at, which must not redraw an otherwise unchanged panel.
+  const status = job.raw_state === "cancel_requested" ? "cancel_requested" : job.state;
+  const cancellable = CANCELLABLE_STATES.has(job.raw_state);
+  const cancelling = state.cancellingJobIds.has(job.id);
+  const lines = jobDetailLines(job);
+  const logText = job.logs?.join("\n") || "暂无日志";
+  const errors = [
+    job.log_error && `无法读取日志：${job.log_error}`,
+    job.detail_error && `无法刷新作业说明：${job.detail_error}`,
+  ].filter(Boolean);
+  const cancelError = state.cancellationErrors.get(job.id);
   if (!changed("job", [
-    job,
-    state.cancellingJobIds.has(job.id),
-    state.cancellationErrors.get(job.id),
+    job.id, job.name, status, cancellable, cancelling, lines, logText, errors, cancelError,
   ])) return;
+
   const detail = byId("job-detail");
   const previousLog = detail.querySelector(".log-output");
   // Follow new output only when the reader was already at the bottom.
@@ -729,9 +786,8 @@ function renderJob(job) {
   titleBlock.appendChild(element("span", "subdued mono", job.id));
   header.appendChild(titleBlock);
   const actions = element("div", "job-actions");
-  actions.appendChild(statusPill(job.raw_state === "cancel_requested" ? "cancel_requested" : job.state));
-  if (CANCELLABLE_STATES.has(job.raw_state)) {
-    const cancelling = state.cancellingJobIds.has(job.id);
+  actions.appendChild(statusPill(status));
+  if (cancellable) {
     const cancelButton = element("button", "danger-button", cancelling ? "正在取消..." : "取消作业");
     cancelButton.type = "button";
     cancelButton.disabled = cancelling;
@@ -741,68 +797,21 @@ function renderJob(job) {
   header.appendChild(actions);
 
   const definitions = element("dl", "job-definitions");
-  definitions.appendChild(detailLine("项目", job.project));
-  definitions.appendChild(detailLine("服务器", job.server));
-  definitions.appendChild(
-    detailLine("GPU", job.gpus?.length ? job.gpus.join(", ") : "待分配"),
-  );
-  const mode = placementMode(job);
-  if (mode) definitions.appendChild(detailLine("调度方式", mode));
-  const peers = (job.explanation?.details?.gpus || [])
-    .map((card) => ({
-      index: card.allocated_index,
-      others: (card.jobs || []).filter((peer) => peer.run_id !== job.id),
-    }))
-    .filter((card) => card.others.length)
-    .map((card) => `GPU ${card.index}：${card.others.map((peer) => `${peer.run_id}（${
-      peer.exclusive ? "独占" : "共享"} ${formatMiB(peer.memory_mib)}）`).join("、")}`);
-  if (peers.length) definitions.appendChild(detailLine("同卡作业", peers.join("\n"), "wrap-anywhere"));
-  definitions.appendChild(detailLine("工作目录", job.working_directory, "mono wrap-anywhere"));
-  definitions.appendChild(detailLine("命令", job.command, "mono wrap-anywhere"));
-  definitions.appendChild(job.finished_at
-    ? detailLine("完成时间", formatDate(job.finished_at))
-    : detailLine(job.eta?.scope === "phase" ? "阶段预计结束" : "预计结束", formatJobEta(job)));
-  if (!job.finished_at && job.eta) {
-    const progress = formatStructuredProgress(job.eta);
-    if (progress) definitions.appendChild(detailLine("阶段进度", progress));
-    const source = job.eta.format === "gpuops_progress"
-      ? "GPUOps 结构化日志"
-      : { logs: "日志进度", submitted: "提交时长" }[job.eta.source_kind];
-    if (source) definitions.appendChild(detailLine("估计来源", source));
-    definitions.appendChild(detailLine("估计依据", processEtaDetails(job), "wrap-anywhere"));
-  }
-  if (job.explanation?.message) {
-    definitions.appendChild(detailLine(
-      job.explanation.waiting ? "等待原因" : "状态说明",
-      job.explanation.message,
-    ));
-  }
-  if (job.explanation?.next_action) {
-    const nextAction = NEXT_ACTION_LABELS[job.explanation.next_action] || job.explanation.next_action;
-    definitions.appendChild(detailLine("建议操作", nextAction));
-  }
-  if (job.failure_reason && !job.explanation?.details?.failure_reason) {
-    definitions.appendChild(detailLine("失败原因", job.failure_reason));
-  }
+  lines.forEach(([label, value, className]) => {
+    definitions.appendChild(detailLine(label, value, className));
+  });
 
   const logHeading = element("div", "log-heading");
   logHeading.appendChild(element("h4", "", "最近日志"));
   logHeading.appendChild(element("span", "subdued", `${job.logs?.length || 0} 行`));
   const log = element("pre", "log-output");
   log.dataset.jobId = job.id;
-  log.textContent = job.logs?.join("\n") || "暂无日志";
+  log.textContent = logText;
 
   detail.replaceChildren(header, definitions, logHeading, log);
   log.scrollTop = followLog ? log.scrollHeight : previousScroll;
-  if (state.cancellationErrors.has(job.id)) {
-    detail.prepend(element("div", "error-banner cancel-error", state.cancellationErrors.get(job.id)));
-  }
-  if (job.log_error) {
-    detail.appendChild(element("div", "error-banner", `无法读取日志：${job.log_error}`));
-  }
-  if (job.detail_error) {
-    detail.appendChild(element("div", "error-banner", `无法刷新作业说明：${job.detail_error}`));
-  }
+  if (cancelError) detail.prepend(element("div", "error-banner cancel-error", cancelError));
+  errors.forEach((message) => detail.appendChild(element("div", "error-banner", message)));
 }
 
 async function cancelJob(job, button) {
@@ -917,9 +926,14 @@ function updateConnection() {
   byId("refresh-button").classList.toggle("is-spinning", polls.some((poll) => poll.pending));
 }
 
-async function refreshStream(key, url, render, errorId, label) {
+async function refreshStream(key, url, render, errorId, label, { force = false } = {}) {
   const poll = state.polls[key] ||= { pending: false, succeeded: false };
-  if (poll.pending) return;
+  if (poll.pending) {
+    // A forced read (manual refresh, cancellation) must not be dropped while an
+    // older poll is in flight; run it as soon as that poll finishes.
+    if (force) poll.rerun = () => refreshStream(key, url, render, errorId, label, { force });
+    return;
+  }
   poll.pending = true;
   updateConnection();
   try {
@@ -942,6 +956,9 @@ async function refreshStream(key, url, render, errorId, label) {
     poll.pending = false;
     updateConnection();
   }
+  const rerun = poll.rerun;
+  poll.rerun = null;
+  if (rerun) await rerun();
 }
 
 async function refresh({ manual = false, forceDetails = false } = {}) {
@@ -962,6 +979,7 @@ async function refresh({ manual = false, forceDetails = false } = {}) {
       renderQueue,
       "queue-refresh-error",
       "当前队列",
+      { force: manual || forceDetails },
     ),
     refreshStream("health", "/healthz", () => {}, null, "健康检查"),
     refreshStream("eta", "/api/v1/process-etas", renderProcessEtas, null, "日志估时"),

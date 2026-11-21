@@ -1016,3 +1016,37 @@ test("unchanged polls keep the rendered rows and log position", async () => {
   assert.notEqual(app.log(), log);
   assert.equal(app.log().scrollTop, 120);
 });
+
+test("a forced queue refresh waits for an in-flight poll instead of being dropped", async () => {
+  const app = await dashboard();
+  const slow = deferred();
+  let calls = 0;
+  app.routes.set("/api/v1/queue", () => {
+    calls += 1;
+    return calls === 1 ? slow.promise : response({ items: [], servers: [] });
+  });
+  const polling = app.poll();
+  await new Promise(setImmediate);
+  const manual = app.context.refresh({ manual: true });
+  await manual;
+  assert.ok(!app.requests.includes("/api/v1/queue?fresh=true"));
+
+  slow.resolve(response({ items: [queueItem("stale")], servers: [] }));
+  await polling;
+  assert.ok(app.requests.includes("/api/v1/queue?fresh=true"));
+  assert.equal(calls, 2);
+});
+
+test("job details are not redrawn when only the explanation timestamp changes", async () => {
+  const app = await dashboard();
+  let observedAt = "2026-09-20T10:00:00Z";
+  app.routes.set("/api/v1/jobs/run-a", () => response(job("run-a", "line", {
+    explanation: { waiting: false, message: "running", observed_at: observedAt, details: {} },
+  })));
+  await app.context.selectJob("run-a");
+  const log = app.log();
+
+  observedAt = "2026-09-20T10:00:05Z";
+  await app.poll();
+  assert.equal(app.log(), log);
+});

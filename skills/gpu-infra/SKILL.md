@@ -54,6 +54,8 @@ trainer callback. Reuse existing structured output, or copy the standard-library
 starting step, then the actual cumulative step about every 10–30 seconds as
 training advances, and once at the end. Count across all epochs, use `None`
 when the total is unknown, and emit only on global rank 0 in distributed runs.
+For third-party trainers, use a public callback if available. If an experiment
+is already running, add progress logging when preparing its next run.
 
 Default to automatic GPU allocation: set the prepared, authorized
 `resources.host`, omit `resources.gpus`, and request the needed `gpu_count`

@@ -47,6 +47,16 @@ Prepare the experiment's code, environment, data, and checkpoints on the chosen
 server before submitting. Use a `gpuops/v1` manifest with an argv command and an
 absolute remote `working_directory`.
 
+When writing or maintaining a training entry point, make the training process
+emit [`GPUOPS_PROGRESS` records](docs/PROGRESS.md) to stdout from its loop or
+trainer callback. Reuse existing structured output, or copy the standard-library
+[ProgressEmitter](examples/progress.example.py) into the experiment. Emit the
+starting step, then the actual cumulative step about every 10–30 seconds as
+training advances, and once at the end. Count across all epochs, use `None`
+when the total is unknown, and emit only on global rank 0 in distributed runs.
+For third-party trainers, use a public callback if available. If an experiment
+is already running, add progress logging when preparing its next run.
+
 Default to automatic GPU allocation: set the prepared, authorized
 `resources.host`, omit `resources.gpus`, and request the needed `gpu_count`
 (default one). Jobs are exclusive by default and need `memory_mib` free on each
@@ -125,14 +135,8 @@ block exclusive jobs. Shared jobs may run alongside them when the remaining
 memory budget permits. Accepted work continues while the control machine is offline.
 Workers need an explicit `fleet start` after a server reboot.
 
-## Optional ETA and Web
+## Web and ETA
 
-ETA requires evidence from readable progress logs or an optional
-`schedule.expected_duration`. Do not infer release time from utilization or
-process age. For new training code with a meaningful counter, see
-[progress contract](docs/PROGRESS.md) and the standard-library
-[emitter](examples/progress.example.py). Report cumulative phase work and use
-rank 0 in distributed training.
-
-The Web console starts with `web` and accepts loopback binds only. It displays
-estimates with their source.
+The loopback Web console (`gpuops web`) shows estimates from progress logs or
+an optional `schedule.expected_duration`, labelled with their source. GPU
+utilization and process age alone cannot predict a release time.

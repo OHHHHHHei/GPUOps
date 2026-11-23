@@ -27,8 +27,9 @@ class ProgressEmitter:
             "elapsed_seconds": now_monotonic - self._phase_started,
             "timestamp": time.time(),
         }
+        # GPUOps merges stderr and stdout; a progress bar can leave its line open.
         print(
-            "GPUOPS_PROGRESS " + json.dumps(record, separators=(",", ":")),
+            "\nGPUOPS_PROGRESS " + json.dumps(record, separators=(",", ":")),
             flush=True,
         )
         self._key = key

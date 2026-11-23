@@ -141,20 +141,14 @@ Set `runtime.conda_environment` or `runtime.environment` only when the experimen
 needs them. Prepare the code, environment, datasets, and checkpoints on the
 destination before submission; GPUOps runs the prepared command.
 
-## Optional Progress Reporting
+## Training progress at submission
 
-When creating training code that the Agent controls, `GPUOPS_PROGRESS` stdout
-records can improve ETA when the work has a meaningful counter.
-Use the standard-library [example emitter](../examples/progress.example.py) and
-follow the [structured progress contract](PROGRESS.md). Existing runs and
-third-party trainers can stay unchanged.
-
-Report cumulative work across the entire declared phase, normally every 10-30
-seconds and at phase transitions. Only rank 0 should print in distributed runs.
-`train` and `training` mean the whole training phase; other names receive an
-explicit phase ETA. Unknown totals, stale sequences, sequences with no measured
-advance, and fewer than two consistent samples remain unknown. This reporting
-requires no manifest option or extra package.
+When preparing training code you control, reuse its `GPUOPS_PROGRESS` output
+or wire the [example emitter](../examples/progress.example.py) into the
+training loop or a trainer callback. The training process writes its actual
+cumulative step and total to stdout on each run. GPUOps uses two advancing
+samples to estimate when training will finish. See the
+[progress contract](PROGRESS.md) for cadence, distributed runs and unknown totals.
 
 ## Recover the Same Submission
 

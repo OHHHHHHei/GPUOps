@@ -1,5 +1,8 @@
 import json
+import runpy
+import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -35,6 +38,24 @@ def predict(content, *, now=NOW, modified_at=None, started_at=NOW - 3600):
     }
     process = {"argv": ["python", "train.py"], "started_at": started_at}
     return estimate(sample, process, PATH, now=now)
+
+
+def test_training_emitter_writes_parseable_progress_after_an_open_bar(capsys, monkeypatch):
+    example = Path(__file__).resolve().parents[1] / "examples/progress.example.py"
+    emitter_class = runpy.run_path(str(example))["ProgressEmitter"]
+    clock = NOW - 20
+    monkeypatch.setattr(time, "time", lambda: clock)
+    monkeypatch.setattr(time, "monotonic", lambda: clock)
+    progress = emitter_class()
+    progress.emit("training", 0, 100)
+    print("\rtraining: 10/100", end="")
+    clock = NOW
+    progress.emit("training", 10, 100)
+    print("loss=0.5")
+
+    result = predict(capsys.readouterr().out)
+    assert result["progress"] == {"phase": "training", "current": 10, "total": 100}
+    assert result["end_at"] == datetime.fromtimestamp(NOW + 180, timezone.utc).isoformat()
 
 
 def test_cumulative_training_records_use_recent_median_and_record_timestamp():

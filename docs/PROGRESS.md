@@ -1,9 +1,9 @@
 # Structured Progress
 
-Experiments may publish machine-readable progress in their normal stdout. GPU
-Ops uses these records for a conservative ETA in the Web GPU overview and
-managed job detail. Reporting is optional: jobs without it run unchanged, and
-GPU Ops continues to recognize supported free-form training logs.
+For training entry points you write or maintain, include machine-readable
+progress in the program's normal stdout. GPUOps reads it from the captured
+console log to estimate training completion in the Web GPU overview and
+managed job detail. GPUOps also accepts jobs with ordinary logs.
 
 ## Record Format
 
@@ -39,8 +39,8 @@ It runs immediately and emits seven records for 3 x 262 = 786 cumulative batches
 
 Use a cumulative counter for the declared phase. For example, training with
 three epochs of 262 batches has `total = 786`; the first batch of epoch two is
-`current = 263`, rather than resetting to 1. Emit a report at the beginning of
-each phase so `elapsed_seconds` covers that whole phase.
+`current = 263`. Emit the starting count when the phase begins. When resuming
+from a checkpoint, emit the restored count and keep the same full-phase total.
 
 ## ETA Semantics
 
@@ -84,21 +84,27 @@ this contract and should remain in the experiment's existing logging.
 
 ## Minimal Integration
 
-Copy `ProgressEmitter` from the example into code controlled by the experiment:
+For a fresh, single-process run, copy `ProgressEmitter` into the experiment
+and call it from the loop. A framework callback can use the trainer's global
+step and total optimizer steps in the same way.
 
 ```python
+import time
+
 progress = ProgressEmitter()
 total_batches = epochs * len(train_loader)
 progress.emit("training", 0, total_batches)
+next_update = time.monotonic() + 20
 
 for epoch in range(epochs):
     for batch_index, batch in enumerate(train_loader):
         train_step(batch)
         completed = epoch * len(train_loader) + batch_index + 1
-        if completed % report_every == 0 or completed == total_batches:
+        now = time.monotonic()
+        if now >= next_update or completed == total_batches:
             progress.emit("training", completed, total_batches)
+            next_update = now + 20
 ```
 
 Do not modify a third-party trainer or an already-running experiment solely to
-force this format. New training code controlled by an Agent should include it by
-default when there is a meaningful progress counter.
+force this format.
